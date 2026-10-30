@@ -41,6 +41,9 @@ importers:
       compression:
         specifier: ^1.7.4
         version: 1.8.1(supports-color@8.1.1)
+      express:
+        specifier: ^5.0.0
+        version: 5.2.1(supports-color@8.1.1)
       firebase-admin:
         specifier: ^13.0.0
         version: 13.10.0(supports-color@8.1.1)
