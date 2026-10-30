@@ -19,6 +19,8 @@ import {
   PaginationQueryDto,
 } from "../common/pagination.dto";
 import { FcmService } from "../notifications/fcm.service";
+import { LoyaltyCalculator } from "../loyalty/loyalty-calculator";
+import { decideShareReward } from "./share-reward";
 import {
   presentBanner,
   presentCashRequest,
@@ -104,6 +106,102 @@ export class CustomerService {
     return presentCustomer(updated);
   }
 
+  /// Grants the configured share reward once per customer account. The
+  /// claim row's primary key and the Serializable transaction together stop
+  /// duplicate grants, including concurrent requests.
+  async claimShareReward(userId: string) {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const settings = await tx.platformSettings.findUniqueOrThrow({
+            where: { id: 1 },
+          });
+          const customer = await tx.customerProfile.findUnique({
+            where: { userId },
+            select: { pointsBalance: true },
+          });
+          if (!customer) throw new NotFoundException("Customer was not found.");
+
+          const existing = await tx.shareRewardClaim.findUnique({
+            where: { customerId: userId },
+          });
+          const decision = decideShareReward(
+            settings.shareRewardPoints,
+            existing !== null,
+          );
+          if (decision !== "granted") {
+            return {
+              status: decision,
+              pointsAwarded: 0,
+              pointsBalance: Number(customer.pointsBalance),
+            };
+          }
+
+          const rewardPoints = settings.shareRewardPoints;
+          await tx.shareRewardClaim.create({
+            data: { customerId: userId, pointsAwarded: rewardPoints },
+          });
+          const updated = await tx.customerProfile.update({
+            where: { userId },
+            data: { pointsBalance: { increment: rewardPoints } },
+            select: { pointsBalance: true },
+          });
+          await tx.pointsLedgerEntry.create({
+            data: {
+              customerId: userId,
+              entryType: PointsEntryType.SHARE_REWARD,
+              pointsDelta: rewardPoints,
+              balanceAfter: updated.pointsBalance,
+              note: "Share app reward.",
+            },
+          });
+          return {
+            status: decision,
+            pointsAwarded: Number(rewardPoints),
+            pointsBalance: Number(updated.pointsBalance),
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        // A concurrent claim won the race and the primary key rejected this one.
+        if (error.code === "P2002") {
+          const customer = await this.prisma.customerProfile.findUnique({
+            where: { userId },
+            select: { pointsBalance: true },
+          });
+          return {
+            status: "already_claimed" as const,
+            pointsAwarded: 0,
+            pointsBalance: Number(customer?.pointsBalance ?? 0),
+          };
+        }
+        // Serialization failure: the caller can safely retry.
+        if (error.code === "P2034") {
+          throw new ConflictException("Please try the share reward again.");
+        }
+      }
+      throw error;
+    }
+  }
+
+  async getDigitalProductImage(productId: string) {
+    const image = await this.prisma.digitalProductImage.findUnique({
+      where: { productId },
+    });
+    if (!image) throw new NotFoundException("Product image was not found.");
+    return image;
+  }
+
+  async getBannerImage(bannerId: string) {
+    const image = await this.prisma.bannerImage.findUnique({
+      where: { bannerId },
+    });
+    if (!image) throw new NotFoundException("Banner image was not found.");
+    return image;
+  }
+
   async getPoints(userId: string) {
     const customer = await this.prisma.customerProfile.findUnique({
       where: { userId },
@@ -136,6 +234,13 @@ export class CustomerService {
       payload: `yallacash://customer/${userId}?v=2&token=${encodeURIComponent(token)}`,
       expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
     };
+  }
+
+  async removeDeviceToken(userId: string, dto: RegisterDeviceTokenDto) {
+    await this.prisma.deviceToken.deleteMany({
+      where: { token: dto.token, userId },
+    });
+    return { success: true };
   }
 
   async registerDeviceToken(userId: string, dto: RegisterDeviceTokenDto) {
@@ -255,12 +360,22 @@ export class CustomerService {
         const settings = await tx.platformSettings.findUniqueOrThrow({
           where: { id: 1 },
         });
+        if (!LoyaltyCalculator.isWholeCashValue(Number(points), settings.pointValueSyp))
+          throw new BadRequestException(
+            "Choose a point amount that converts to whole SYP.",
+          );
+
         const saved = await tx.cashRedemptionRequest.create({
           data: {
             customerId: userId,
             pointsRequested: points,
             pointValueSypSnapshot: settings.pointValueSyp,
-            cashValueSyp: points * BigInt(settings.pointValueSyp),
+            cashValueSyp: BigInt(
+              LoyaltyCalculator.cashValueFor(
+                Number(points),
+                settings.pointValueSyp,
+              ),
+            ),
           },
         });
 

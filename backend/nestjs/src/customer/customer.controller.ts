@@ -49,6 +49,13 @@ export class CustomerController {
     return this.customer.getPoints(user.id);
   }
 
+  // The reward is granted server-side once per account. Opening the share
+  // sheet cannot prove delivery, so the app calls this after the share action.
+  @Post("share-reward/claim")
+  claimShareReward(@CurrentUser() user: AuthenticatedUser) {
+    return this.customer.claimShareReward(user.id);
+  }
+
   @Post("qr-token")
   issueQrToken(@CurrentUser() user: AuthenticatedUser) {
     return this.customer.issueQrToken(user.id);
@@ -60,6 +67,16 @@ export class CustomerController {
     @Body() dto: RegisterDeviceTokenDto,
   ) {
     return this.customer.registerDeviceToken(user.id, dto);
+  }
+
+  // Called on sign-out. Only this account's own token row is removed, so one
+  // customer can never detach another customer's device.
+  @Post("device-token/remove")
+  removeDeviceToken(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RegisterDeviceTokenDto,
+  ) {
+    return this.customer.removeDeviceToken(user.id, dto);
   }
 
   @Get("transactions")

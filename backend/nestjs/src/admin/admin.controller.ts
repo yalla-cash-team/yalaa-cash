@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from "@nestjs/common";
 import { UserRole } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { AuthenticatedUser } from "../auth/decorators/current-user.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
+import { NotificationBroadcastService } from "../notifications/notification-broadcast.service";
 import { AdminService } from "./admin.service";
 import {
   AdjustCustomerPointsDto,
@@ -26,6 +28,10 @@ import {
   ResolveCashRequestDto,
   ResolveProductRedemptionDto,
   SendNotificationDto,
+  UpdateMinCashWithdrawalDto,
+  UpdateShareRewardDto,
+  UpdateStoreLogoDto,
+  MonthlySettlementDto,
   SettleStoreDto,
   SettlementQueryDto,
   UpdateBannerDto,
@@ -38,7 +44,10 @@ import {
 @Roles(UserRole.ADMIN)
 @Controller("admin")
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly broadcasts: NotificationBroadcastService,
+  ) {}
 
   @Get("overview")
   overview() {
@@ -105,9 +114,18 @@ export class AdminController {
     return this.admin.resolveProductRedemption(redemptionId, dto);
   }
 
+  // Broadcasts to every customer device. Admin-only via class-level @Roles.
   @Post("notifications")
-  sendNotification(@Body() dto: SendNotificationDto) {
-    return this.admin.sendGeneralNotification(dto);
+  sendNotification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SendNotificationDto,
+  ) {
+    return this.broadcasts.send(user.id, dto);
+  }
+
+  @Get("notifications")
+  listNotifications() {
+    return this.broadcasts.list();
   }
 
   @Get("stores")
@@ -138,6 +156,20 @@ export class AdminController {
     return this.admin.updateBanner(bannerId, dto);
   }
 
+  // Admin-only (class-level @Roles(ADMIN)); the file is validated in the service.
+  @Put("banners/:bannerId/image")
+  setBannerImage(
+    @Param("bannerId") bannerId: string,
+    @Body() dto: UpdateStoreLogoDto,
+  ) {
+    return this.admin.setBannerImage(bannerId, dto);
+  }
+
+  @Delete("banners/:bannerId/image")
+  removeBannerImage(@Param("bannerId") bannerId: string) {
+    return this.admin.removeBannerImage(bannerId);
+  }
+
   @Delete("banners/:bannerId")
   deleteBanner(@Param("bannerId") bannerId: string) {
     return this.admin.deleteBanner(bannerId);
@@ -166,6 +198,20 @@ export class AdminController {
     return this.admin.updateStore(storeId, dto);
   }
 
+  // Admin-only (class-level @Roles(ADMIN)); the file is validated in the service.
+  @Put("stores/:storeId/logo")
+  setStoreLogo(
+    @Param("storeId") storeId: string,
+    @Body() dto: UpdateStoreLogoDto,
+  ) {
+    return this.admin.setStoreLogo(storeId, dto);
+  }
+
+  @Delete("stores/:storeId/logo")
+  removeStoreLogo(@Param("storeId") storeId: string) {
+    return this.admin.removeStoreLogo(storeId);
+  }
+
   // Soft delete only: deactivates the store (and its merchant accounts),
   // never physically deletes the row or any historical data. See
   // AdminService.deleteStore().
@@ -182,6 +228,20 @@ export class AdminController {
   @Post("products")
   createProduct(@Body() dto: CreateDigitalProductDto) {
     return this.admin.createProduct(dto);
+  }
+
+  // Admin-only (class-level @Roles(ADMIN)); the file is validated in the service.
+  @Put("products/:productId/image")
+  setProductImage(
+    @Param("productId") productId: string,
+    @Body() dto: UpdateStoreLogoDto,
+  ) {
+    return this.admin.setProductImage(productId, dto);
+  }
+
+  @Delete("products/:productId/image")
+  removeProductImage(@Param("productId") productId: string) {
+    return this.admin.removeProductImage(productId);
   }
 
   @Patch("products/:productId")
@@ -202,6 +262,17 @@ export class AdminController {
     return this.admin.createMerchantAccount(dto);
   }
 
+  // Stores the minimum payout only; no withdrawal flow reads it yet.
+  @Patch("settings/min-cash-withdrawal")
+  updateMinCashWithdrawal(@Body() dto: UpdateMinCashWithdrawalDto) {
+    return this.admin.updateMinCashWithdrawal(dto);
+  }
+
+  @Patch("settings/share-reward")
+  updateShareReward(@Body() dto: UpdateShareRewardDto) {
+    return this.admin.updateShareRewardPoints(dto);
+  }
+
   @Get("settings")
   getSettings() {
     return this.admin.getSettings();
@@ -215,6 +286,25 @@ export class AdminController {
   @Get("settlements")
   listSettlements(@Query() query: SettlementQueryDto) {
     return this.admin.listSettlements(query);
+  }
+
+  // Monthly settlement: preview, bulk run (admin-only), and history.
+  @Get("settlements/monthly")
+  previewMonthlySettlement(@Query() query: MonthlySettlementDto) {
+    return this.admin.previewMonthlySettlement(query);
+  }
+
+  @Post("settlements/monthly")
+  runMonthlySettlement(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: MonthlySettlementDto,
+  ) {
+    return this.admin.runMonthlySettlement(user.id, dto);
+  }
+
+  @Get("settlements/monthly/history")
+  listMonthlySettlementHistory() {
+    return this.admin.listMonthlySettlementHistory();
   }
 
   @Post("settlements/settle")

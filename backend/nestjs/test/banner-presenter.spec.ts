@@ -8,6 +8,7 @@ describe("presentBanner", () => {
       title: "Summer offers",
       subtitle: "Up to 40% off",
       imageUrl: "https://cdn.example.com/a.png",
+      imageVersion: 0,
       targetUrl: "/stores?category=food",
       placement: BannerPlacement.HOME,
       style: BannerStyle.PROMO,

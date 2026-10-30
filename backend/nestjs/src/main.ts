@@ -2,6 +2,7 @@ import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import compression from "compression";
+import { json, urlencoded } from "express";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 import { ApiExceptionFilter } from "./common/api-exception.filter";
@@ -15,7 +16,11 @@ function parseCorsOrigins(value?: string): string[] {
 }
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // Nest's built-in body parser is disabled so the JSON limit can be raised:
+  // store logos travel as base64 JSON (max ~300 KB decoded), above the 100 KB default.
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.use(json({ limit: "1mb" }));
+  app.use(urlencoded({ extended: true }));
   const config = app.get(ConfigService);
 
   app.use(helmet());

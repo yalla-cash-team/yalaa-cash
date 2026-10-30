@@ -115,7 +115,7 @@ export class MerchantService {
 
         const customer = await tx.customerProfile.findUnique({
           where: { userId: customerId },
-          select: { pointsBalance: true },
+          select: { pointsBalance: true, pointRemainderSyp: true },
         });
         if (!customer) throw new NotFoundException("Customer was not found.");
 
@@ -126,6 +126,7 @@ export class MerchantService {
           invoiceAmountSyp: dto.amountSyp,
           commissionRate: Number(account.store.commissionRate),
           pointValueSyp: settings.pointValueSyp,
+          carriedRemainderSyp: customer.pointRemainderSyp,
         });
 
         const saved = await tx.loyaltyTransaction.create({
@@ -149,6 +150,7 @@ export class MerchantService {
           where: { userId: customerId },
           data: {
             pointsBalance: { increment: BigInt(calculation.customerPoints) },
+            pointRemainderSyp: calculation.customerRemainderSyp,
           },
           select: { pointsBalance: true },
         });

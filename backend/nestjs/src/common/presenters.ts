@@ -86,7 +86,11 @@ export function presentBanner(banner: Banner) {
     id: banner.id,
     title: banner.title,
     subtitle: banner.subtitle,
-    imageUrl: banner.imageUrl,
+    // An uploaded image takes precedence over the URL the admin entered.
+    imageUrl:
+      banner.imageVersion > 0
+        ? `/banners/${banner.id}/image?v=${banner.imageVersion}`
+        : banner.imageUrl,
     targetUrl: banner.targetUrl,
     placement: banner.placement.toLowerCase(),
     style: banner.style.toLowerCase(),
@@ -110,6 +114,11 @@ export function presentStore(store: Store) {
     description: store.description,
     location: store.location,
     imageUrl: store.imageUrl,
+    // Relative to the API base URL; null until an admin uploads a logo.
+    logoUrl:
+      store.logoVersion > 0
+        ? `/stores/${store.id}/logo?v=${store.logoVersion}`
+        : null,
     iconSeed: store.iconSeed,
     isActive: store.isActive,
     governorateId: store.governorateId,
@@ -129,7 +138,7 @@ export function presentTransaction(transaction: TransactionWithStore) {
     commissionAmountSyp: toNumber(transaction.commissionAmountSyp),
     platformRevenueSyp: toNumber(transaction.platformRevenueSyp),
     customerShareSyp: toNumber(transaction.customerShareSyp),
-    pointValueSypSnapshot: transaction.pointValueSypSnapshot,
+    pointValueSypSnapshot: Number(transaction.pointValueSypSnapshot),
     customerPointsEarned: toNumber(transaction.customerPointsEarned),
     createdAt: transaction.createdAt.toISOString(),
   };
@@ -140,7 +149,11 @@ export function presentDigitalProduct(product: DigitalProduct) {
     id: product.id,
     name: product.name,
     costInPoints: toNumber(product.costInPoints),
-    imageUrl: product.imageUrl,
+    // An uploaded image takes precedence over the legacy imageUrl text.
+    imageUrl:
+      product.imageVersion > 0
+        ? `/digital-products/${product.id}/image?v=${product.imageVersion}`
+        : product.imageUrl,
     iconSeed: product.iconSeed,
     requiresPhoneNumber: product.requiresPhoneNumber,
     isActive: product.isActive,

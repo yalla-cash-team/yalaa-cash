@@ -36,6 +36,11 @@ enum SettlementStatus {
   SETTLED
 }
 
+enum SettlementKind {
+  CYCLE
+  MONTHLY
+}
+
 enum PointsEntryType {
   INVOICE_EARN
   CASH_RESERVE
@@ -46,6 +51,8 @@ enum PointsEntryType {
   PRODUCT_REDEEM
   ADMIN_GRANT
   ADMIN_DEDUCT
+  SHARE_REWARD
+  POINT_CONVERSION
 }
 
 enum BannerPlacement {
@@ -93,6 +100,34 @@ model DeviceToken {
   @@index([userId])
 }
 
+enum BroadcastStatus {
+  PENDING
+  SENT
+  PARTIAL
+  FAILED
+}
+
+/// History of admin push broadcasts. The unique idempotencyKey makes a retried
+/// or double-tapped send return the original record instead of sending again.
+model NotificationBroadcast {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  idempotencyKey     String          @unique
+  title              String
+  body               String
+  status             BroadcastStatus @default(PENDING)
+  recipientCount     Int             @default(0)
+  sentCount          Int             @default(0)
+  failedCount        Int             @default(0)
+  staleTokensRemoved Int             @default(0)
+  errorMessage       String?
+  createdByUserId    String          @db.Uuid
+  createdAt          DateTime        @default(now())
+  completedAt        DateTime?
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
 model CustomerProfile {
   userId        String   @id @db.Uuid
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -100,12 +135,15 @@ model CustomerProfile {
   governorate   String
   governorateId String?  @db.Uuid
   pointsBalance BigInt   @default(0)
+  /// Earned SYP not yet converted into whole points; carried into the next reward.
+  pointRemainderSyp Decimal @default(0) @db.Decimal(12, 4)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   governorateRecord Governorate? @relation(fields: [governorateId], references: [id], onDelete: SetNull)
 
   transactions           LoyaltyTransaction[]
+  shareRewardClaim       ShareRewardClaim?
   pointsLedger           PointsLedgerEntry[]
   productRedemptions     ProductRedemption[]
   cashRedemptionRequests CashRedemptionRequest[]
@@ -129,11 +167,23 @@ model Governorate {
   @@index([isActive, displayOrder])
 }
 
+/// Uploaded banner image bytes (same storage approach as store logos).
+model BannerImage {
+  bannerId    String   @id @db.Uuid
+  banner      Banner   @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+  contentType String
+  data        Bytes
+  updatedAt   DateTime @updatedAt
+}
+
 model Banner {
   id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   title        String
   subtitle     String?
   imageUrl     String
+  /// Bumped on every banner image upload or removal (cache-busting).
+  imageVersion Int             @default(0)
+  image        BannerImage?
   targetUrl    String?
   placement    BannerPlacement @default(HOME)
   style        BannerStyle     @default(PROMO)
@@ -160,6 +210,8 @@ model Store {
   location       String   @default("")
   imageUrl       String?
   iconSeed       Int      @default(0)
+  /// Bumped on every logo upload or removal; used to cache-bust logo URLs.
+  logoVersion    Int      @default(0)
   isActive       Boolean  @default(true)
   governorateId  String   @db.Uuid
   governorate    Governorate @relation(fields: [governorateId], references: [id])
@@ -169,10 +221,29 @@ model Store {
   merchantAccounts MerchantAccount[]
   transactions     LoyaltyTransaction[]
   settlements      MerchantSettlement[]
+  logo             StoreLogo?
 
   @@index([city, category])
   @@index([isActive])
   @@index([governorateId, isActive])
+}
+
+/// Store logo image bytes, kept out of the Store row so store lists stay light.
+model StoreLogo {
+  storeId     String   @id @db.Uuid
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  contentType String
+  data        Bytes
+  updatedAt   DateTime @updatedAt
+}
+
+/// One row per customer account that has claimed the share reward. The
+/// primary key makes a second claim fail, so the reward is granted once.
+model ShareRewardClaim {
+  customerId    String          @id @db.Uuid
+  customer      CustomerProfile @relation(fields: [customerId], references: [userId], onDelete: Cascade)
+  pointsAwarded BigInt
+  createdAt     DateTime        @default(now())
 }
 
 model MerchantAccount {
@@ -214,7 +285,11 @@ model AdminProfile {
 
 model PlatformSettings {
   id            Int      @id @default(1)
-  pointValueSyp Int
+  pointValueSyp Decimal  @db.Decimal(12, 4)
+  /// Smallest cash payout allowed. 0 means no minimum. Not enforced yet.
+  minCashWithdrawalSyp BigInt @default(0)
+  /// Points awarded once per customer for sharing the app. 0 disables it.
+  shareRewardPoints    BigInt @default(0)
   updatedAt     DateTime @updatedAt
 }
 
@@ -231,7 +306,7 @@ model LoyaltyTransaction {
   commissionAmountSyp    BigInt
   platformRevenueSyp     BigInt
   customerShareSyp       BigInt
-  pointValueSypSnapshot  Int
+  pointValueSypSnapshot  Decimal         @db.Decimal(12, 4)
   customerPointsEarned   BigInt
   idempotencyKey         String          @unique @db.Uuid
   createdAt              DateTime        @default(now())
@@ -264,6 +339,8 @@ model DigitalProduct {
   name                String
   costInPoints        BigInt
   imageUrl            String?
+  /// Bumped on every image upload or removal; used to cache-bust the image URL.
+  imageVersion        Int      @default(0)
   iconSeed            Int      @default(0)
   requiresPhoneNumber Boolean  @default(false)
   isActive            Boolean  @default(true)
@@ -271,8 +348,19 @@ model DigitalProduct {
   updatedAt           DateTime @updatedAt
 
   redemptions ProductRedemption[]
+  image       DigitalProductImage?
 
   @@index([isActive])
+}
+
+/// Digital product image bytes, kept out of the DigitalProduct row so the
+/// product list stays light.
+model DigitalProductImage {
+  productId   String         @id @db.Uuid
+  product     DigitalProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  contentType String
+  data        Bytes
+  updatedAt   DateTime       @updatedAt
 }
 
 model ProductRedemption {
@@ -296,7 +384,7 @@ model CashRedemptionRequest {
   customerId            String            @db.Uuid
   customer              CustomerProfile   @relation(fields: [customerId], references: [userId])
   pointsRequested       BigInt
-  pointValueSypSnapshot Int
+  pointValueSypSnapshot Decimal           @db.Decimal(12, 4)
   cashValueSyp          BigInt
   status                CashRequestStatus @default(PENDING)
   settledByUserId       String?           @db.Uuid
@@ -319,6 +407,9 @@ model MerchantSettlement {
   status           SettlementStatus @default(OPEN)
   settledByUserId  String?          @db.Uuid
   settledAt        DateTime?
+  /// CYCLE: per-merchant settlement since the last cycle. MONTHLY: one calendar
+  /// month, settled in bulk. Only CYCLE rows move the cycle boundary.
+  kind             SettlementKind  @default(CYCLE)
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 

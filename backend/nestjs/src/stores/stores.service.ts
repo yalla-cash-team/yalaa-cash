@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { presentStore } from "../common/presenters";
 import { ListStoresDto } from "./dto/list-stores.dto";
@@ -25,5 +25,13 @@ export class StoresService {
       orderBy: [{ city: "asc" }, { category: "asc" }, { name: "asc" }],
     });
     return { items: stores.map(presentStore) };
+  }
+
+  async getStoreLogo(storeId: string) {
+    const logo = await this.prisma.storeLogo.findUnique({
+      where: { storeId },
+    });
+    if (!logo) throw new NotFoundException("Store logo was not found.");
+    return logo;
   }
 }

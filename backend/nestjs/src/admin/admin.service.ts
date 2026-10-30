@@ -9,10 +9,17 @@ import {
   PointsEntryType,
   Prisma,
   RedemptionStatus,
+  SettlementKind,
   SettlementStatus,
   UserRole,
 } from "@prisma/client";
 import { randomInt } from "crypto";
+import {
+  MonthBounds,
+  parseCompletedMonth,
+  settleEachMerchant,
+  summarizeOutcomes,
+} from "./monthly-settlement";
 import { PasswordService } from "../auth/password.service";
 import {
   presentBanner,
@@ -38,7 +45,6 @@ import {
   CreateMerchantAccountDto,
   CreateStoreDto,
   ResolveProductRedemptionDto,
-  SendNotificationDto,
   SettleStoreDto,
   SettlementQueryDto,
   UpdateBannerDto,
@@ -46,7 +52,12 @@ import {
   UpdateGovernorateDto,
   UpdatePointSettingsDto,
   UpdateStoreDto,
+  UpdateMinCashWithdrawalDto,
+  UpdateShareRewardDto,
+  UpdateStoreLogoDto,
 } from "./dto/admin.dto";
+import { decodeStoreLogo } from "../stores/store-logo";
+import { convertPointBalance } from "../loyalty/point-conversion";
 
 @Injectable()
 export class AdminService {
@@ -339,10 +350,6 @@ export class AdminService {
     return presentProductRedemption(updated);
   }
 
-  async sendGeneralNotification(dto: SendNotificationDto) {
-    return this.fcm.sendToAllCustomers({ title: dto.title, body: dto.body });
-  }
-
   async listStores() {
     const stores = await this.prisma.store.findMany({
       orderBy: [{ city: "asc" }, { category: "asc" }, { name: "asc" }],
@@ -532,6 +539,130 @@ export class AdminService {
   /// `MerchantAccount.isActive` on every call, so this alone is sufficient).
   /// Both writes happen in one transaction so they can never partially
   /// apply. Calling this again on an already-inactive store is a safe no-op.
+  // Validates the image first (type, size and magic bytes) so nothing is
+  // written for an invalid file.
+  async setStoreLogo(storeId: string, dto: UpdateStoreLogoDto) {
+    const logo = decodeStoreLogo(dto.contentType, dto.dataBase64);
+    await this.assertStoreExists(storeId);
+
+    const updated = await this.prisma.store.update({
+      where: { id: storeId },
+      data: {
+        logoVersion: { increment: 1 },
+        logo: {
+          upsert: {
+            create: { contentType: logo.contentType, data: logo.data },
+            update: { contentType: logo.contentType, data: logo.data },
+          },
+        },
+      },
+    });
+    return presentStore(updated);
+  }
+
+  async removeStoreLogo(storeId: string) {
+    await this.assertStoreExists(storeId);
+
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.storeLogo.deleteMany({ where: { storeId } }),
+      this.prisma.store.update({
+        where: { id: storeId },
+        data: { logoVersion: { increment: 1 } },
+      }),
+    ]);
+    return presentStore(updated);
+  }
+
+  private async assertStoreExists(storeId: string): Promise<void> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { id: true },
+    });
+    if (!store) throw new NotFoundException("Store was not found.");
+  }
+
+  // Same validation as store logos (PNG/JPEG/WebP, size cap, magic bytes).
+  async setProductImage(productId: string, dto: UpdateStoreLogoDto) {
+    const image = decodeStoreLogo(dto.contentType, dto.dataBase64);
+    await this.assertProductExists(productId);
+
+    const updated = await this.prisma.digitalProduct.update({
+      where: { id: productId },
+      data: {
+        imageVersion: { increment: 1 },
+        image: {
+          upsert: {
+            create: { contentType: image.contentType, data: image.data },
+            update: { contentType: image.contentType, data: image.data },
+          },
+        },
+      },
+    });
+    return presentDigitalProduct(updated);
+  }
+
+  async removeProductImage(productId: string) {
+    await this.assertProductExists(productId);
+
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.digitalProductImage.deleteMany({ where: { productId } }),
+      this.prisma.digitalProduct.update({
+        where: { id: productId },
+        data: { imageVersion: { increment: 1 } },
+      }),
+    ]);
+    return presentDigitalProduct(updated);
+  }
+
+  private async assertProductExists(productId: string): Promise<void> {
+    const product = await this.prisma.digitalProduct.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
+    if (!product) throw new NotFoundException("Product was not found.");
+  }
+
+  // Same image validation as store logos and product images.
+  async setBannerImage(bannerId: string, dto: UpdateStoreLogoDto) {
+    const image = decodeStoreLogo(dto.contentType, dto.dataBase64);
+    await this.assertBannerExists(bannerId);
+
+    const updated = await this.prisma.banner.update({
+      where: { id: bannerId },
+      data: {
+        imageVersion: { increment: 1 },
+        image: {
+          upsert: {
+            create: { contentType: image.contentType, data: image.data },
+            update: { contentType: image.contentType, data: image.data },
+          },
+        },
+      },
+    });
+    return presentBanner(updated);
+  }
+
+  async removeBannerImage(bannerId: string) {
+    await this.assertBannerExists(bannerId);
+
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.bannerImage.deleteMany({ where: { bannerId } }),
+      this.prisma.banner.update({
+        where: { id: bannerId },
+        data: { imageVersion: { increment: 1 } },
+      }),
+    ]);
+    return presentBanner(updated);
+  }
+
+  private async assertBannerExists(bannerId: string): Promise<void> {
+    const banner = await this.prisma.banner.findUnique({
+      where: { id: bannerId },
+      select: { id: true },
+    });
+    if (!banner) throw new NotFoundException("Banner was not found.");
+  }
+
   async deleteStore(storeId: string) {
     const current = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -640,19 +771,136 @@ export class AdminService {
       create: { id: 1, pointValueSyp: 5 },
     });
     return {
-      pointValueSyp: settings.pointValueSyp,
+      pointValueSyp: settings.pointValueSyp.toNumber(),
+      minCashWithdrawalSyp: Number(settings.minCashWithdrawalSyp),
+      shareRewardPoints: Number(settings.shareRewardPoints),
       updatedAt: settings.updatedAt.toISOString(),
     };
   }
 
+  /// Changes the SYP value of one point and converts every balance so each
+  /// customer keeps the same monetary amount. One Serializable transaction:
+  /// concurrent earnings or redemptions either finish first or retry.
+  /// Requests pending at the old value block the change, because their
+  /// held points and fixed cash amounts would no longer match.
   async updateSettings(dto: UpdatePointSettingsDto) {
+    const newValue = new Prisma.Decimal(dto.pointValueSyp);
+
+    const settings = await this.prisma.$transaction(
+      async (tx) => {
+        const current = await tx.platformSettings.upsert({
+          where: { id: 1 },
+          update: {},
+          create: { id: 1, pointValueSyp: 5 },
+        });
+        if (current.pointValueSyp.equals(newValue)) return current;
+
+        const [pendingCash, pendingProducts] = await Promise.all([
+          tx.cashRedemptionRequest.count({
+            where: { status: CashRequestStatus.PENDING },
+          }),
+          tx.productRedemption.count({
+            where: { status: RedemptionStatus.PENDING },
+          }),
+        ]);
+        if (pendingCash + pendingProducts > 0) {
+          throw new ConflictException(
+            "Resolve pending cash and product requests before changing the point value.",
+          );
+        }
+
+        const customers = await tx.customerProfile.findMany({
+          where: {
+            OR: [
+              { pointsBalance: { gt: 0 } },
+              { pointRemainderSyp: { gt: 0 } },
+            ],
+          },
+          select: {
+            userId: true,
+            pointsBalance: true,
+            pointRemainderSyp: true,
+          },
+        });
+
+        for (const customer of customers) {
+          const next = convertPointBalance(
+            {
+              points: customer.pointsBalance,
+              remainderSyp: customer.pointRemainderSyp,
+            },
+            current.pointValueSyp,
+            newValue,
+          );
+          const delta = next.points - customer.pointsBalance;
+          await tx.customerProfile.update({
+            where: { userId: customer.userId },
+            data: {
+              pointsBalance: next.points,
+              pointRemainderSyp: next.remainderSyp,
+            },
+          });
+          if (delta !== BigInt(0)) {
+            await tx.pointsLedgerEntry.create({
+              data: {
+                customerId: customer.userId,
+                entryType: PointsEntryType.POINT_CONVERSION,
+                pointsDelta: delta,
+                balanceAfter: next.points,
+                note: `Point value changed from ${current.pointValueSyp.toString()} to ${newValue.toString()} SYP.`,
+              },
+            });
+          }
+        }
+
+        return tx.platformSettings.update({
+          where: { id: 1 },
+          data: { pointValueSyp: newValue },
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 60_000,
+      },
+    );
+
+    return {
+      pointValueSyp: settings.pointValueSyp.toNumber(),
+      minCashWithdrawalSyp: Number(settings.minCashWithdrawalSyp),
+      shareRewardPoints: Number(settings.shareRewardPoints),
+      updatedAt: settings.updatedAt.toISOString(),
+    };
+  }
+
+  async updateMinCashWithdrawal(dto: UpdateMinCashWithdrawalDto) {
     const settings = await this.prisma.platformSettings.upsert({
       where: { id: 1 },
-      update: { pointValueSyp: dto.pointValueSyp },
-      create: { id: 1, pointValueSyp: dto.pointValueSyp },
+      update: { minCashWithdrawalSyp: BigInt(dto.minCashWithdrawalSyp) },
+      create: {
+        id: 1,
+        pointValueSyp: 5,
+        minCashWithdrawalSyp: BigInt(dto.minCashWithdrawalSyp),
+      },
     });
     return {
-      pointValueSyp: settings.pointValueSyp,
+      minCashWithdrawalSyp: Number(settings.minCashWithdrawalSyp),
+      shareRewardPoints: Number(settings.shareRewardPoints),
+      updatedAt: settings.updatedAt.toISOString(),
+    };
+  }
+
+  async updateShareRewardPoints(dto: UpdateShareRewardDto) {
+    const settings = await this.prisma.platformSettings.upsert({
+      where: { id: 1 },
+      update: { shareRewardPoints: BigInt(dto.shareRewardPoints) },
+      create: {
+        id: 1,
+        pointValueSyp: 5,
+        shareRewardPoints: BigInt(dto.shareRewardPoints),
+      },
+    });
+    return {
+      shareRewardPoints: Number(settings.shareRewardPoints),
       updatedAt: settings.updatedAt.toISOString(),
     };
   }
@@ -665,9 +913,192 @@ export class AdminService {
   /// repeatedly on the same calendar day, the moment new transactions exist.
   private async latestSettlement(storeId: string) {
     return this.prisma.merchantSettlement.findFirst({
-      where: { storeId, status: SettlementStatus.SETTLED },
+      where: {
+        storeId,
+        kind: SettlementKind.CYCLE,
+        status: SettlementStatus.SETTLED,
+      },
       orderBy: { settledAt: "desc" },
     });
+  }
+
+  /// Cycle totals must leave out invoices that a monthly settlement already
+  /// covered, so no invoice is counted in two settlements.
+  private async monthlyExclusions(
+    storeId: string,
+  ): Promise<Prisma.LoyaltyTransactionWhereInput[] | undefined> {
+    const monthly = await this.prisma.merchantSettlement.findMany({
+      where: {
+        storeId,
+        kind: SettlementKind.MONTHLY,
+        status: SettlementStatus.SETTLED,
+      },
+      select: { periodStart: true, periodEnd: true },
+    });
+    // Undefined keeps the original query shape when no monthly rows exist.
+    if (monthly.length === 0) return undefined;
+    return monthly.map((row) => ({
+      NOT: { createdAt: { gte: row.periodStart, lt: row.periodEnd } },
+    }));
+  }
+
+  /// Unpaid invoices of one merchant in one calendar month: created after the
+  /// last cycle settlement, and not already covered by a monthly settlement.
+  private async unpaidForMonth(
+    db: Prisma.TransactionClient,
+    storeId: string,
+    bounds: MonthBounds,
+  ) {
+    const monthlyRow = await db.merchantSettlement.findFirst({
+      where: {
+        storeId,
+        kind: SettlementKind.MONTHLY,
+        periodStart: bounds.periodStart,
+        periodEnd: bounds.periodEnd,
+      },
+      select: { id: true },
+    });
+    const latestCycle = await db.merchantSettlement.findFirst({
+      where: {
+        storeId,
+        kind: SettlementKind.CYCLE,
+        status: SettlementStatus.SETTLED,
+      },
+      orderBy: { settledAt: "desc" },
+    });
+    const cycleBoundary = latestCycle?.settledAt ?? null;
+    const from =
+      cycleBoundary && cycleBoundary > bounds.periodStart
+        ? cycleBoundary
+        : bounds.periodStart;
+    const aggregate = monthlyRow
+      ? null
+      : await db.loyaltyTransaction.aggregate({
+          where: { storeId, createdAt: { gte: from, lt: bounds.periodEnd } },
+          _count: { id: true },
+          _sum: { amountSyp: true, commissionAmountSyp: true },
+        });
+    return {
+      alreadySettled: monthlyRow !== null,
+      transactionCount: aggregate?._count.id ?? 0,
+      totalSalesSyp: toNumber(aggregate?._sum.amountSyp ?? BigInt(0)),
+      commissionDueSyp: toNumber(
+        aggregate?._sum.commissionAmountSyp ?? BigInt(0),
+      ),
+    };
+  }
+
+  /// Per-merchant status for a completed calendar month. Settling is a separate
+  /// step, so this never changes any data.
+  async previewMonthlySettlement(query: { month: string }) {
+    const bounds = parseCompletedMonth(query.month, new Date());
+    const stores = await this.prisma.store.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    const merchants = await Promise.all(
+      stores.map(async (store) => {
+        const unpaid = await this.unpaidForMonth(this.prisma, store.id, bounds);
+        const status = unpaid.alreadySettled
+          ? "settled"
+          : unpaid.transactionCount > 0
+            ? "open"
+            : "none";
+        return {
+          storeId: store.id,
+          storeName: store.name,
+          status,
+          transactionCount: unpaid.transactionCount,
+          totalSalesSyp: unpaid.totalSalesSyp,
+          commissionDueSyp: unpaid.commissionDueSyp,
+        };
+      }),
+    );
+    const open = merchants.filter((merchant) => merchant.status === "open");
+    return {
+      month: bounds.monthKey,
+      merchants,
+      openMerchantCount: open.length,
+      totalSalesSyp: open.reduce((sum, m) => sum + m.totalSalesSyp, 0),
+      totalCommissionSyp: open.reduce((sum, m) => sum + m.commissionDueSyp, 0),
+    };
+  }
+
+  /// Settles every open merchant for one completed month. Each merchant runs
+  /// in its own Serializable transaction, so one failure never undoes others.
+  async runMonthlySettlement(adminUserId: string, dto: { month: string }) {
+    const preview = await this.previewMonthlySettlement(dto);
+    const bounds = parseCompletedMonth(dto.month, new Date());
+    const candidates = preview.merchants.filter(
+      (merchant) => merchant.status === "open",
+    );
+    const outcomes = await settleEachMerchant(candidates, (merchant) =>
+      this.settleMonthForMerchant(merchant.storeId, bounds, adminUserId),
+    );
+    return { month: bounds.monthKey, ...summarizeOutcomes(outcomes), merchants: outcomes };
+  }
+
+  private async settleMonthForMerchant(
+    storeId: string,
+    bounds: MonthBounds,
+    adminUserId: string,
+  ): Promise<"settled" | "skipped"> {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const unpaid = await this.unpaidForMonth(tx, storeId, bounds);
+          if (unpaid.alreadySettled || unpaid.transactionCount === 0) {
+            return "skipped";
+          }
+          await tx.merchantSettlement.create({
+            data: {
+              storeId,
+              kind: SettlementKind.MONTHLY,
+              periodStart: bounds.periodStart,
+              periodEnd: bounds.periodEnd,
+              transactionCount: unpaid.transactionCount,
+              totalSalesSyp: BigInt(unpaid.totalSalesSyp),
+              commissionDueSyp: BigInt(unpaid.commissionDueSyp),
+              status: SettlementStatus.SETTLED,
+              settledAt: new Date(),
+              settledByUserId: adminUserId,
+            },
+          });
+          return "settled";
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      // A concurrent run already created this month's row (unique key).
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return "skipped";
+      }
+      throw error;
+    }
+  }
+
+  async listMonthlySettlementHistory() {
+    const rows = await this.prisma.merchantSettlement.findMany({
+      where: { kind: SettlementKind.MONTHLY },
+      orderBy: { periodStart: "desc" },
+      take: 120,
+      include: { store: { select: { name: true } } },
+    });
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        storeId: row.storeId,
+        storeName: row.store.name,
+        month: row.periodStart.toISOString().slice(0, 7),
+        transactionCount: row.transactionCount,
+        totalSalesSyp: toNumber(row.totalSalesSyp),
+        commissionDueSyp: toNumber(row.commissionDueSyp),
+        settledAt: row.settledAt?.toISOString() ?? null,
+      })),
+    };
   }
 
   async listSettlements(query: SettlementQueryDto) {
@@ -727,6 +1158,7 @@ export class AdminService {
           where: {
             storeId: store.id,
             createdAt: cycleStart ? { gte: cycleStart } : undefined,
+            AND: await this.monthlyExclusions(store.id),
           },
           _count: { id: true },
           _sum: { amountSyp: true, commissionAmountSyp: true },
@@ -783,6 +1215,7 @@ export class AdminService {
       where: {
         storeId: dto.storeId,
         createdAt: cycleStart ? { gte: cycleStart, lt: now } : { lt: now },
+        AND: await this.monthlyExclusions(dto.storeId),
       },
       _count: { id: true },
       _sum: {

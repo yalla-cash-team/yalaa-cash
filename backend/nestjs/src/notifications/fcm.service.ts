@@ -9,13 +9,25 @@ interface PushMessage {
   data?: Record<string, string>;
 }
 
+export interface PushSendStats {
+  sent: number;
+  failed: number;
+  staleRemoved: number;
+}
+
+export interface BroadcastSendStats extends PushSendStats {
+  recipients: number;
+}
+
 /**
  * Sends push notifications through Firebase Cloud Messaging, reusing the
  * same Firebase Admin app FirebaseOAuthService initializes for Google
- * Sign-In verification. Every send is best-effort: a customer-facing
- * request (redemption submit/resolve) must never fail because a push
- * notification could not be delivered, so callers fire-and-forget these
- * methods and failures are only logged.
+ * Sign-In verification.
+ *
+ * sendToUser is best-effort and never rejects: customer-facing requests must
+ * not fail because a push could not be delivered. sendToAllCustomers reports
+ * real counts and may reject on database errors, so the broadcast service can
+ * record the send as failed.
  */
 @Injectable()
 export class FcmService {
@@ -27,13 +39,6 @@ export class FcmService {
     private readonly prisma: PrismaService,
   ) {}
 
-  /**
-   * Fully guarded: every caller treats this as fire-and-forget (`void
-   * this.fcm.sendToUser(...)`), so nothing in this method may ever reject —
-   * an uncaught rejection here would be an unhandled promise rejection,
-   * which crashes the whole Node process. A DB hiccup while looking up
-   * someone's device tokens must never take down an unrelated request.
-   */
   async sendToUser(userId: string, message: PushMessage): Promise<void> {
     try {
       const tokens = await this.prisma.deviceToken.findMany({
@@ -52,38 +57,34 @@ export class FcmService {
     }
   }
 
-  /** Same guarantee as sendToUser: never throws, never rejects. */
-  async sendToAllCustomers(message: PushMessage): Promise<{ sent: number }> {
-    try {
-      const tokens = await this.prisma.deviceToken.findMany({
-        where: { user: { role: "CUSTOMER" } },
-        select: { token: true },
-      });
-      await this.sendToTokens(
-        tokens.map((t) => t.token),
-        message,
-      );
-      return { sent: tokens.length };
-    } catch (error) {
-      this.logger.warn(
-        `sendToAllCustomers failed, broadcast skipped: ${this.describeError(error)}`,
-      );
-      return { sent: 0 };
-    }
+  /** Sends to every registered customer device and reports the counts. */
+  async sendToAllCustomers(
+    message: PushMessage,
+  ): Promise<BroadcastSendStats> {
+    const tokens = await this.prisma.deviceToken.findMany({
+      where: { user: { role: "CUSTOMER" } },
+      select: { token: true },
+    });
+    const stats = await this.sendToTokens(
+      tokens.map((t) => t.token),
+      message,
+    );
+    return { recipients: tokens.length, ...stats };
   }
 
   private async sendToTokens(
     tokens: string[],
     message: PushMessage,
-  ): Promise<void> {
-    if (tokens.length === 0) return;
+  ): Promise<PushSendStats> {
+    const empty: PushSendStats = { sent: 0, failed: 0, staleRemoved: 0 };
+    if (tokens.length === 0) return empty;
 
     let app;
     try {
       app = this.firebaseOAuth.getApp();
     } catch {
       this.logger.warn("Skipped push send: Firebase Admin is not configured.");
-      return;
+      return { ...empty, failed: tokens.length };
     }
 
     let messaging;
@@ -93,9 +94,10 @@ export class FcmService {
       this.logger.warn(
         `Skipped push send: could not obtain messaging client: ${this.describeError(error)}`,
       );
-      return;
+      return { ...empty, failed: tokens.length };
     }
 
+    const stats: PushSendStats = { ...empty };
     const staleTokens: string[] = [];
 
     for (let i = 0; i < tokens.length; i += FcmService.BATCH_SIZE) {
@@ -106,6 +108,8 @@ export class FcmService {
           notification: { title: message.title, body: message.body },
           ...(message.data ? { data: message.data } : {}),
         });
+        stats.sent += response.successCount;
+        stats.failed += response.failureCount;
         response.responses.forEach((res, index) => {
           const code = (res.error as { code?: string } | undefined)?.code;
           if (
@@ -117,21 +121,25 @@ export class FcmService {
           }
         });
       } catch (error) {
+        stats.failed += batch.length;
         this.logger.warn(`FCM batch send failed: ${this.describeError(error)}`);
       }
     }
 
     if (staleTokens.length > 0) {
       try {
-        await this.prisma.deviceToken.deleteMany({
+        const removed = await this.prisma.deviceToken.deleteMany({
           where: { token: { in: staleTokens } },
         });
+        stats.staleRemoved = removed.count;
       } catch (error) {
         this.logger.warn(
           `Failed to clean up ${staleTokens.length} stale token(s): ${this.describeError(error)}`,
         );
       }
     }
+
+    return stats;
   }
 
   /** Never includes token values or credentials — message/error text only. */
