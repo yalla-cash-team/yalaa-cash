@@ -131,6 +131,147 @@ class Banner {
       );
 }
 
+/// One admin push broadcast and its delivery result, as recorded by the server.
+class NotificationBroadcast {
+  const NotificationBroadcast({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.status,
+    required this.recipientCount,
+    required this.sentCount,
+    required this.failedCount,
+    this.createdAt,
+  });
+
+  final String id;
+  final String title;
+  final String body;
+
+  /// One of PENDING, SENT, PARTIAL or FAILED.
+  final String status;
+  final int recipientCount;
+  final int sentCount;
+  final int failedCount;
+  final DateTime? createdAt;
+}
+
+/// Outcome of a share-reward claim as decided by the server.
+class ShareRewardResult {
+  const ShareRewardResult({
+    required this.status,
+    required this.pointsAwarded,
+    required this.pointsBalance,
+  });
+
+  /// One of 'granted', 'already_claimed' or 'disabled'.
+  final String status;
+  final int pointsAwarded;
+  final int pointsBalance;
+
+  bool get granted => status == 'granted';
+}
+
+/// One merchant's status for a calendar month: settled, open or none.
+class MonthlyMerchantStatus {
+  const MonthlyMerchantStatus({
+    required this.storeId,
+    required this.storeName,
+    required this.status,
+    required this.transactionCount,
+    required this.totalSalesSyp,
+    required this.commissionDueSyp,
+  });
+
+  final String storeId;
+  final String storeName;
+  final String status;
+  final int transactionCount;
+  final int totalSalesSyp;
+  final int commissionDueSyp;
+}
+
+/// Preview of a monthly settlement; nothing is changed until it is confirmed.
+class MonthlySettlementPreview {
+  const MonthlySettlementPreview({
+    required this.month,
+    required this.merchants,
+    required this.openMerchantCount,
+    required this.totalSalesSyp,
+    required this.totalCommissionSyp,
+  });
+
+  final String month;
+  final List<MonthlyMerchantStatus> merchants;
+  final int openMerchantCount;
+  final int totalSalesSyp;
+  final int totalCommissionSyp;
+}
+
+/// Result for one merchant after a monthly run.
+class MonthlyMerchantOutcome {
+  const MonthlyMerchantOutcome({
+    required this.storeName,
+    required this.status,
+    required this.commissionDueSyp,
+    this.error,
+  });
+
+  final String storeName;
+
+  /// settled, skipped or failed.
+  final String status;
+  final int commissionDueSyp;
+  final String? error;
+}
+
+class MonthlySettlementRunResult {
+  const MonthlySettlementRunResult({
+    required this.month,
+    required this.settledCount,
+    required this.skippedCount,
+    required this.failedCount,
+    required this.totalCommissionSyp,
+    required this.merchants,
+  });
+
+  final String month;
+  final int settledCount;
+  final int skippedCount;
+  final int failedCount;
+  final int totalCommissionSyp;
+  final List<MonthlyMerchantOutcome> merchants;
+}
+
+/// A stored monthly settlement, shown in the history.
+class MonthlySettlementRecord {
+  const MonthlySettlementRecord({
+    required this.storeName,
+    required this.month,
+    required this.transactionCount,
+    required this.totalSalesSyp,
+    required this.commissionDueSyp,
+    this.settledAt,
+  });
+
+  final String storeName;
+  final String month;
+  final int transactionCount;
+  final int totalSalesSyp;
+  final int commissionDueSyp;
+  final DateTime? settledAt;
+}
+
+/// A logo image picked by an admin, validated server-side as well.
+class StoreLogoUpload {
+  const StoreLogoUpload({required this.bytes, required this.contentType});
+
+  final List<int> bytes;
+
+  /// One of image/png, image/jpeg or image/webp.
+  final String contentType;
+}
+
 class PartnerStore {
   const PartnerStore({
     required this.id,
@@ -142,6 +283,7 @@ class PartnerStore {
     required this.iconSeed,
     required this.governorateId,
     this.isActive = true,
+    this.logoUrl,
   });
 
   final String id;
@@ -153,6 +295,9 @@ class PartnerStore {
   final int iconSeed;
   final String governorateId;
   final bool isActive;
+
+  /// Absolute URL of the uploaded logo, or null when the store has none.
+  final String? logoUrl;
 
   PartnerStore copyWith({
     String? name,
@@ -166,6 +311,7 @@ class PartnerStore {
   }) =>
       PartnerStore(
         id: id,
+        logoUrl: logoUrl,
         name: name ?? this.name,
         category: category ?? this.category,
         commissionRate: commissionRate ?? this.commissionRate,
@@ -215,6 +361,7 @@ class DigitalProduct {
     required this.iconSeed,
     this.requiresPhoneNumber = false,
     this.isActive = true,
+    this.imageUrl,
   });
 
   final String id;
@@ -223,6 +370,9 @@ class DigitalProduct {
   final int iconSeed;
   final bool requiresPhoneNumber;
   final bool isActive;
+
+  /// Absolute image URL, or null when the product has no image.
+  final String? imageUrl;
 
   DigitalProduct copyWith({
     String? name,
@@ -233,6 +383,7 @@ class DigitalProduct {
   }) =>
       DigitalProduct(
         id: id,
+        imageUrl: imageUrl,
         name: name ?? this.name,
         costInPoints: costInPoints ?? this.costInPoints,
         iconSeed: iconSeed ?? this.iconSeed,

@@ -1,0 +1,71 @@
+{
+  "project_info": {
+    "project_number": "73807966839",
+    "project_id": "yalla-cash-app",
+    "storage_bucket": "yalla-cash-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:73807966839:android:6b66519050f565085c4c72",
+        "android_client_info": {
+          "package_name": "com.yallacash.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "73807966839-8or1a987fqfisubsjnm43369239vneml.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.yallacash.app",
+            "certificate_hash": "9e5192a34db079cf4b1e0f6e2afe82cc226c03cf"
+          }
+        },
+        {
+          "client_id": "73807966839-eglsfupp1c5f9kc9cro6t2m2br2fl40j.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.yallacash.app",
+            "certificate_hash": "e06576cf6f271a4bb7046a0cd8d394deb327c12e"
+          }
+        },
+        {
+          "client_id": "73807966839-kk1spd60jkd8qil7lakn0ee6jrb0lblh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.yallacash.app",
+            "certificate_hash": "9f1bfedad4234f4f882c5ca1fdea0f88a36d611d"
+          }
+        },
+        {
+          "client_id": "73807966839-v94825vc12evjc4mu9tgqkpg4q74dld9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.yallacash.app",
+            "certificate_hash": "dea2c60deee70ead9f39cd12e0e67e5bf77a3286"
+          }
+        },
+        {
+          "client_id": "73807966839-8t217hqu3q76djlurkd8altr1ibacp82.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBoXaiyj7pqhmMvB2jTc66I2i1NIco4iWE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "73807966839-8t217hqu3q76djlurkd8altr1ibacp82.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

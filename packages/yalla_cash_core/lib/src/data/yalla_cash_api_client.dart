@@ -82,7 +82,21 @@ class YallaCashApiClient {
         authenticated: authenticated,
       );
 
+  Future<Object?> put(
+    String path, {
+    Map<String, Object?>? body,
+  }) =>
+      _send('PUT', path, body: body);
+
   Future<Object?> delete(String path) => _send('DELETE', path);
+
+  /// Absolute URL for a server-relative path such as `/stores/1/logo?v=2`.
+  /// Full URLs (legacy product, banner or CDN links) are returned unchanged.
+  Uri resolveUrl(String path) {
+    final parsed = Uri.parse(path);
+    if (parsed.hasScheme) return parsed;
+    return _uri(parsed.path, parsed.queryParameters);
+  }
 
   /// In-flight refresh-token rotation. Guarantees exactly ONE active
   /// `/auth/refresh` request per API client at any time: concurrent

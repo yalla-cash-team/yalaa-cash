@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:yalla_cash_core/src/data/yalla_cash_api_client.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/models.dart';
@@ -173,12 +175,21 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   }
 
   @override
+  Future<void> unregisterDeviceToken(String token) async {
+    await _client.post('/customer/device-token/remove', body: {'token': token});
+  }
+
+  @override
   Future<List<PartnerStore>> listActiveStores(
-          {String? city, String? category}) async =>
+          {String? city, String? category, String? governorateId}) async =>
       apiItems(
         await _client.get(
           '/stores',
-          query: {'city': city, 'category': category},
+          query: {
+            'city': city,
+            'category': category,
+            'governorateId': governorateId,
+          },
           authenticated: false,
         ),
       ).map(_storeFromApi).toList(growable: false);
@@ -229,6 +240,12 @@ class RemoteYallaCashRepository implements YallaCashRepository {
       },
     );
   }
+
+  @override
+  Future<List<ProductRedemption>> listCustomerProductRedemptions() async =>
+      apiItems(await _client.get('/customer/redemptions/products'))
+          .map(_productRedemptionFromApi)
+          .toList(growable: false);
 
   @override
   Future<MerchantWorkspaceSnapshot> getMerchantWorkspace() async {
@@ -503,13 +520,37 @@ class RemoteYallaCashRepository implements YallaCashRepository {
       );
 
   @override
-  Future<void> sendGeneralNotification({
+  Future<NotificationBroadcast> sendGeneralNotification({
     required String title,
     required String body,
-  }) async {
-    await _client
-        .post('/admin/notifications', body: {'title': title, 'body': body});
-  }
+    required String idempotencyKey,
+  }) async =>
+      _broadcastFromApi(apiMap(await _client.post(
+        '/admin/notifications',
+        body: {
+          'title': title,
+          'body': body,
+          'idempotencyKey': idempotencyKey,
+        },
+      )));
+
+  @override
+  Future<List<NotificationBroadcast>> listNotificationBroadcasts() async =>
+      apiItems(await _client.get('/admin/notifications'))
+          .map(_broadcastFromApi)
+          .toList(growable: false);
+
+  NotificationBroadcast _broadcastFromApi(Map<String, Object?> json) =>
+      NotificationBroadcast(
+        id: json['id']! as String,
+        title: json['title']! as String,
+        body: json['body']! as String,
+        status: json['status']! as String,
+        recipientCount: _int(json['recipientCount'] ?? 0),
+        sentCount: _int(json['sentCount'] ?? 0),
+        failedCount: _int(json['failedCount'] ?? 0),
+        createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+      );
 
   @override
   Future<List<PartnerStore>> listAdminStores() async =>
@@ -525,6 +566,20 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   Future<PartnerStore> updateStore(PartnerStore store) async =>
       _storeFromApi(apiMap(await _client.patch('/admin/stores/${store.id}',
           body: _storeToApi(store))));
+
+  @override
+  Future<PartnerStore> setStoreLogo(String storeId, StoreLogoUpload logo) async =>
+      _storeFromApi(apiMap(await _client.put(
+        '/admin/stores/$storeId/logo',
+        body: {
+          'contentType': logo.contentType,
+          'dataBase64': base64Encode(logo.bytes),
+        },
+      )));
+
+  @override
+  Future<PartnerStore> removeStoreLogo(String storeId) async =>
+      _storeFromApi(apiMap(await _client.delete('/admin/stores/$storeId/logo')));
 
   @override
   Future<void> deleteStore(String storeId) async {
@@ -547,6 +602,22 @@ class RemoteYallaCashRepository implements YallaCashRepository {
       _productFromApi(apiMap(await _client.patch(
           '/admin/products/${product.id}',
           body: _productToApi(product))));
+
+  @override
+  Future<DigitalProduct> setProductImage(
+          String productId, StoreLogoUpload image) async =>
+      _productFromApi(apiMap(await _client.put(
+        '/admin/products/$productId/image',
+        body: {
+          'contentType': image.contentType,
+          'dataBase64': base64Encode(image.bytes),
+        },
+      )));
+
+  @override
+  Future<DigitalProduct> removeProductImage(String productId) async =>
+      _productFromApi(
+          apiMap(await _client.delete('/admin/products/$productId/image')));
 
   @override
   Future<List<MerchantAccount>> listMerchantAccounts() async =>
@@ -579,17 +650,58 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   }
 
   @override
-  Future<int> getPointValue() async =>
-      _int(apiMap(await _client.get('/admin/settings'))['pointValueSyp']);
+  Future<double> getPointValue() async => _pointValue(
+      apiMap(await _client.get('/admin/settings'))['pointValueSyp']);
 
   @override
-  Future<int> updatePointValue(int pointValueSyp) async => _int(
+  Future<double> updatePointValue(double pointValueSyp) async => _pointValue(
         apiMap(
           await _client.patch(
             '/admin/settings',
             body: {'pointValueSyp': pointValueSyp},
           ),
         )['pointValueSyp'],
+      );
+
+  // The API returns the point value as a JSON number (may be fractional).
+  double _pointValue(Object? value) => double.parse('$value');
+
+  @override
+  Future<int> getMinCashWithdrawal() async => _int(apiMap(
+      await _client.get('/admin/settings'))['minCashWithdrawalSyp']);
+
+  @override
+  Future<int> updateMinCashWithdrawal(int amountSyp) async => _int(
+        apiMap(
+          await _client.patch(
+            '/admin/settings/min-cash-withdrawal',
+            body: {'minCashWithdrawalSyp': amountSyp},
+          ),
+        )['minCashWithdrawalSyp'],
+      );
+
+  @override
+  Future<ShareRewardResult> claimShareReward() async {
+    final json = apiMap(await _client.post('/customer/share-reward/claim'));
+    return ShareRewardResult(
+      status: json['status']! as String,
+      pointsAwarded: _int(json['pointsAwarded']),
+      pointsBalance: _int(json['pointsBalance']),
+    );
+  }
+
+  @override
+  Future<int> getShareRewardPoints() async => _int(
+      apiMap(await _client.get('/admin/settings'))['shareRewardPoints']);
+
+  @override
+  Future<int> updateShareRewardPoints(int points) async => _int(
+        apiMap(
+          await _client.patch(
+            '/admin/settings/share-reward',
+            body: {'shareRewardPoints': points},
+          ),
+        )['shareRewardPoints'],
       );
 
   @override
@@ -606,6 +718,75 @@ class RemoteYallaCashRepository implements YallaCashRepository {
           },
         ),
       ).map(_settlementFromApi).toList(growable: false);
+
+  @override
+  Future<MonthlySettlementPreview> previewMonthlySettlement(String month) async {
+    final json = apiMap(await _client.get(
+      '/admin/settlements/monthly',
+      query: {'month': month},
+    ));
+    return MonthlySettlementPreview(
+      month: json['month']! as String,
+      merchants: (json['merchants']! as List<Object?>)
+          .map((item) => _monthlyStatusFromApi(item! as Map<String, Object?>))
+          .toList(growable: false),
+      openMerchantCount: _int(json['openMerchantCount'] ?? 0),
+      totalSalesSyp: _int(json['totalSalesSyp'] ?? 0),
+      totalCommissionSyp: _int(json['totalCommissionSyp'] ?? 0),
+    );
+  }
+
+  @override
+  Future<MonthlySettlementRunResult> runMonthlySettlement(String month) async {
+    final json = apiMap(await _client.post(
+      '/admin/settlements/monthly',
+      body: {'month': month},
+    ));
+    return MonthlySettlementRunResult(
+      month: json['month']! as String,
+      settledCount: _int(json['settledCount'] ?? 0),
+      skippedCount: _int(json['skippedCount'] ?? 0),
+      failedCount: _int(json['failedCount'] ?? 0),
+      totalCommissionSyp: _int(json['totalCommissionSyp'] ?? 0),
+      merchants: (json['merchants']! as List<Object?>)
+          .map((item) => _monthlyOutcomeFromApi(item! as Map<String, Object?>))
+          .toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory() async =>
+      apiItems(await _client.get('/admin/settlements/monthly/history'))
+          .map(_monthlyRecordFromApi)
+          .toList(growable: false);
+
+  MonthlyMerchantStatus _monthlyStatusFromApi(Map<String, Object?> json) =>
+      MonthlyMerchantStatus(
+        storeId: json['storeId']! as String,
+        storeName: json['storeName']! as String,
+        status: json['status']! as String,
+        transactionCount: _int(json['transactionCount'] ?? 0),
+        totalSalesSyp: _int(json['totalSalesSyp'] ?? 0),
+        commissionDueSyp: _int(json['commissionDueSyp'] ?? 0),
+      );
+
+  MonthlyMerchantOutcome _monthlyOutcomeFromApi(Map<String, Object?> json) =>
+      MonthlyMerchantOutcome(
+        storeName: json['storeName']! as String,
+        status: json['status']! as String,
+        commissionDueSyp: _int(json['commissionDueSyp'] ?? 0),
+        error: json['error'] as String?,
+      );
+
+  MonthlySettlementRecord _monthlyRecordFromApi(Map<String, Object?> json) =>
+      MonthlySettlementRecord(
+        storeName: json['storeName']! as String,
+        month: json['month']! as String,
+        transactionCount: _int(json['transactionCount'] ?? 0),
+        totalSalesSyp: _int(json['totalSalesSyp'] ?? 0),
+        commissionDueSyp: _int(json['commissionDueSyp'] ?? 0),
+        settledAt: DateTime.tryParse(json['settledAt'] as String? ?? ''),
+      );
 
   @override
   Future<MerchantSettlementSummary> settleStore({
@@ -664,11 +845,26 @@ class RemoteYallaCashRepository implements YallaCashRepository {
         updatedAt: DateTime.parse(json['updatedAt']! as String),
       );
 
+  @override
+  Future<Banner> setBannerImage(String bannerId, StoreLogoUpload image) async =>
+      _bannerFromApi(apiMap(await _client.put(
+        '/admin/banners/$bannerId/image',
+        body: {
+          'contentType': image.contentType,
+          'dataBase64': base64Encode(image.bytes),
+        },
+      )));
+
+  @override
+  Future<Banner> removeBannerImage(String bannerId) async => _bannerFromApi(
+      apiMap(await _client.delete('/admin/banners/$bannerId/image')));
+
   Banner _bannerFromApi(Map<String, Object?> json) => Banner(
         id: json['id']! as String,
         title: json['title']! as String,
         subtitle: json['subtitle'] as String?,
-        imageUrl: json['imageUrl']! as String,
+        // Empty when the banner relies on an uploaded image without a URL.
+        imageUrl: _absoluteUrl(json['imageUrl']) ?? '',
         targetUrl: json['targetUrl'] as String?,
         placement: (json['placement'] as String?) ?? 'home',
         style: (json['style'] as String?) ?? 'promo',
@@ -696,7 +892,14 @@ class RemoteYallaCashRepository implements YallaCashRepository {
         iconSeed: _int(json['iconSeed'] ?? 0),
         governorateId: json['governorateId']! as String,
         isActive: json['isActive'] as bool? ?? true,
+        logoUrl: _absoluteUrl(json['logoUrl']),
       );
+
+  /// Server-relative image paths (e.g. `/stores/1/logo?v=2`) made absolute.
+  /// Legacy full URLs pass through unchanged.
+  String? _absoluteUrl(Object? value) => value is String && value.isNotEmpty
+      ? _client.resolveUrl(value).toString()
+      : null;
 
   LoyaltyTransaction _transactionFromApi(Map<String, Object?> json) =>
       LoyaltyTransaction(
@@ -721,6 +924,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
         iconSeed: _int(json['iconSeed'] ?? 0),
         requiresPhoneNumber: json['requiresPhoneNumber'] as bool? ?? false,
         isActive: json['isActive'] as bool? ?? true,
+        imageUrl: _absoluteUrl(json['imageUrl']),
       );
 
   CashRedemptionRequest _cashRequestFromApi(Map<String, Object?> json) =>

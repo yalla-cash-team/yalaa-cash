@@ -955,6 +955,14 @@ String merchantFailureMessage(YallaCashFailure? failure) {
     case 'request_timeout':
       return 'انتهت مهلة الاتصال بالخادم. حاول مرة أخرى.';
     case 'unauthorized':
+      // The backend returns HTTP 401 with this same generic code for both a
+      // real merchant session/login failure AND an expired/invalid scanned
+      // Customer QR token (see MerchantService.customerIdFromQr) — the two
+      // are distinguished here by the underlying message text so a QR
+      // failure is never mistaken for the merchant's own session expiring.
+      if (failure.message.contains('QR token')) {
+        return 'انتهت صلاحية رمز QR. اطلب من الزبون عرض الرمز الجديد ثم أعد المسح.';
+      }
       return 'انتهت الجلسة أو بيانات الدخول غير صحيحة.';
     case 'forbidden':
       return 'هذا الحساب لا يملك صلاحية الوصول إلى بيانات المحل.';

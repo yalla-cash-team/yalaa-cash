@@ -1,8 +1,10 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart';
 import 'package:yalla_cash_customer/src/customer_app.dart';
+import 'package:yalla_cash_customer/src/push_notifications.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +12,7 @@ void main() async {
   final firebaseInitialization = () async {
     try {
       await Firebase.initializeApp();
+      FirebaseMessaging.onBackgroundMessage(firebaseBackgroundMessageHandler);
       if (kDebugMode) {
         debugPrint(
           'CUSTOMER_STARTUP firebase_initialized_ms=${startupStopwatch.elapsedMilliseconds}',

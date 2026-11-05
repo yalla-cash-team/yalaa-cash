@@ -11,9 +11,24 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
+        // LOCAL-ONLY fallback mirrors, tried before google(), for environments
+        // where dl.google.com cannot be reached directly.
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
         google()
         mavenCentral()
         gradlePluginPortal()
+    }
+
+    // Local-only workaround: the com.google.gms.google-services plugin marker
+    // is unresolved from every repository above in this environment. Resolve
+    // it directly to its known backing module instead.
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "com.google.gms.google-services") {
+                useModule("com.google.gms:google-services:4.4.2")
+            }
+        }
     }
 }
 
@@ -33,6 +48,9 @@ plugins {
 // depending solely on that mirror being reachable.
 dependencyResolutionManagement {
     repositories {
+        // LOCAL-ONLY fallback mirror, tried before google(), for environments
+        // where dl.google.com cannot be reached directly.
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
         google()
         mavenCentral()
     }

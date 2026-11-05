@@ -111,6 +111,9 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
   Future<void> registerDeviceToken(String token) async {}
 
   @override
+  Future<void> unregisterDeviceToken(String token) async {}
+
+  @override
   Future<Customer> getCustomerProfile() async => _store.currentCustomer!;
 
   @override
@@ -175,11 +178,12 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
 
   @override
   Future<List<PartnerStore>> listActiveStores(
-          {String? city, String? category}) async =>
+          {String? city, String? category, String? governorateId}) async =>
       _store.stores
           .where((store) =>
               store.isActive &&
-              (category == null || store.category == category))
+              (category == null || store.category == category) &&
+              (governorateId == null || store.governorateId == governorateId))
           .toList(growable: false);
 
   @override
@@ -216,6 +220,13 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
       phoneNumber: phoneNumber,
     );
   }
+
+  // Demo/in-memory mode doesn't track individual redemption records (see
+  // listAdminProductRedemptions below, which is the same "not implemented
+  // for the demo store" precedent).
+  @override
+  Future<List<ProductRedemption>> listCustomerProductRedemptions() async =>
+      const [];
 
   @override
   Future<MerchantWorkspaceSnapshot> getMerchantWorkspace() async {
@@ -358,6 +369,16 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
 
   @override
+  // The in-memory demo has no image storage, so uploads are not kept here.
+  @override
+  Future<Banner> setBannerImage(String bannerId, StoreLogoUpload image) async =>
+      (await listAdminBanners()).firstWhere((item) => item.id == bannerId);
+
+  @override
+  Future<Banner> removeBannerImage(String bannerId) async =>
+      (await listAdminBanners()).firstWhere((item) => item.id == bannerId);
+
+  @override
   Future<Banner> createBanner(Banner banner) async {
     _store.addBanner(banner);
     return banner;
@@ -423,10 +444,28 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
   }
 
   @override
-  Future<void> sendGeneralNotification({
+  // The in-memory demo has no push provider, so nothing is delivered.
+  @override
+  Future<List<NotificationBroadcast>> listNotificationBroadcasts() async =>
+      const [];
+
+  @override
+  Future<NotificationBroadcast> sendGeneralNotification({
     required String title,
     required String body,
-  }) async {}
+    required String idempotencyKey,
+  }) async {
+    return NotificationBroadcast(
+      id: idempotencyKey,
+      title: title,
+      body: body,
+      status: 'SENT',
+      recipientCount: 0,
+      sentCount: 0,
+      failedCount: 0,
+      createdAt: DateTime.now(),
+    );
+  }
 
   @override
   Future<List<PartnerStore>> listAdminStores() async =>
@@ -449,6 +488,16 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     _store.deleteStore(storeId);
   }
 
+  // The in-memory demo has no file storage, so logos are not kept here.
+  @override
+  Future<PartnerStore> setStoreLogo(
+          String storeId, StoreLogoUpload logo) async =>
+      (await listAdminStores()).firstWhere((store) => store.id == storeId);
+
+  @override
+  Future<PartnerStore> removeStoreLogo(String storeId) async =>
+      (await listAdminStores()).firstWhere((store) => store.id == storeId);
+
   @override
   Future<List<DigitalProduct>> listAdminProducts() async =>
       _store.products.toList(growable: false);
@@ -464,6 +513,16 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     _store.updateDigitalProduct(product.id, product);
     return product;
   }
+
+  // The in-memory demo has no image storage, so images are not kept here.
+  @override
+  Future<DigitalProduct> setProductImage(
+          String productId, StoreLogoUpload image) async =>
+      (await listAdminProducts()).firstWhere((item) => item.id == productId);
+
+  @override
+  Future<DigitalProduct> removeProductImage(String productId) async =>
+      (await listAdminProducts()).firstWhere((item) => item.id == productId);
 
   @override
   Future<List<MerchantAccount>> listMerchantAccounts() async =>
@@ -484,12 +543,38 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
   }
 
   @override
-  Future<int> getPointValue() async => _store.pointValueSyp;
+  Future<double> getPointValue() async => _store.pointValueSyp;
 
   @override
-  Future<int> updatePointValue(int pointValueSyp) async {
+  Future<double> updatePointValue(double pointValueSyp) async {
     _store.updatePointValue(pointValueSyp);
     return _store.pointValueSyp;
+  }
+
+  @override
+  Future<int> getMinCashWithdrawal() async => _store.minCashWithdrawalSyp;
+
+  @override
+  Future<int> updateMinCashWithdrawal(int amountSyp) async {
+    _store.updateMinCashWithdrawal(amountSyp);
+    return _store.minCashWithdrawalSyp;
+  }
+
+  // The in-memory demo never grants points: the reward needs the backend.
+  @override
+  Future<ShareRewardResult> claimShareReward() async => const ShareRewardResult(
+        status: 'disabled',
+        pointsAwarded: 0,
+        pointsBalance: 0,
+      );
+
+  @override
+  Future<int> getShareRewardPoints() async => _store.shareRewardPoints;
+
+  @override
+  Future<int> updateShareRewardPoints(int points) async {
+    _store.updateShareRewardPoints(points);
+    return _store.shareRewardPoints;
   }
 
   @override
@@ -521,6 +606,32 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
       );
     }).toList(growable: false);
   }
+
+  // The in-memory demo has no settlement ledger, so monthly runs are empty.
+  @override
+  Future<MonthlySettlementPreview> previewMonthlySettlement(String month) async =>
+      MonthlySettlementPreview(
+        month: month,
+        merchants: const [],
+        openMerchantCount: 0,
+        totalSalesSyp: 0,
+        totalCommissionSyp: 0,
+      );
+
+  @override
+  Future<MonthlySettlementRunResult> runMonthlySettlement(String month) async =>
+      MonthlySettlementRunResult(
+        month: month,
+        settledCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        totalCommissionSyp: 0,
+        merchants: const [],
+      );
+
+  @override
+  Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory() async =>
+      const [];
 
   @override
   Future<MerchantSettlementSummary> settleStore({

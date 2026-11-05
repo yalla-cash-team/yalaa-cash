@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:math';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart' hide Banner;
 import 'package:yalla_cash_core/yalla_cash_core.dart' as core show Banner;
@@ -413,6 +416,8 @@ class _AdminContent extends StatelessWidget {
         AdminSection.settings => SettingsAdmin(
             cubit: cubit,
             pointValueSyp: state.pointValueSyp,
+            minCashWithdrawalSyp: state.minCashWithdrawalSyp,
+            shareRewardPoints: state.shareRewardPoints,
           ),
       };
 }
@@ -735,8 +740,23 @@ class NotificationsAdmin extends StatefulWidget {
 class _NotificationsAdminState extends State<NotificationsAdmin> {
   final titleController = TextEditingController();
   final bodyController = TextEditingController();
+  late Future<List<NotificationBroadcast>> _history;
   bool sending = false;
   String? resultMessage;
+  bool resultIsError = false;
+
+  // One key per composed message. Retrying the same message after a failure
+  // reuses it, so the server returns the original broadcast instead of
+  // notifying customers twice. Editing the message starts a new key.
+  String? _pendingKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _history = widget.cubit.listNotificationBroadcasts();
+    titleController.addListener(_composeChanged);
+    bodyController.addListener(_composeChanged);
+  }
 
   @override
   void dispose() {
@@ -745,30 +765,102 @@ class _NotificationsAdminState extends State<NotificationsAdmin> {
     super.dispose();
   }
 
+  void _composeChanged() => _pendingKey = null;
+
   bool get _canSend =>
       titleController.text.trim().isNotEmpty &&
       bodyController.text.trim().isNotEmpty &&
       !sending;
 
+  String _newKey() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+
+  Future<bool> _confirm() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تأكيد إرسال الإشعار'),
+        content: Text(
+            'سيصل هذا الإشعار إلى جميع الزبائن: "${titleController.text.trim()}". لا يمكن التراجع عنه.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('إلغاء')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('إرسال')),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _send() async {
+    if (!_canSend || !await _confirm() || !mounted) return;
+    final key = _pendingKey ??= _newKey();
     setState(() {
       sending = true;
       resultMessage = null;
     });
-    final success = await widget.cubit.sendGeneralNotification(
+    final broadcast = await widget.cubit.sendGeneralNotification(
       title: titleController.text.trim(),
       body: bodyController.text.trim(),
+      idempotencyKey: key,
     );
     if (!mounted) return;
     setState(() {
       sending = false;
-      resultMessage = success ? 'تم إرسال الإشعار إلى جميع الزبائن.' : null;
-      if (success) {
+      resultIsError = broadcast == null || broadcast.status == 'FAILED';
+      resultMessage = _resultText(broadcast);
+      if (broadcast != null) {
+        _pendingKey = null;
         titleController.clear();
         bodyController.clear();
       }
+      _history = widget.cubit.listNotificationBroadcasts();
     });
   }
+
+  String _resultText(NotificationBroadcast? broadcast) => switch (broadcast?.status) {
+        'SENT' => 'تم إرسال الإشعار إلى ${broadcast!.sentCount} جهاز.',
+        'PARTIAL' =>
+          'أُرسل إلى ${broadcast!.sentCount} جهاز، وفشل ${broadcast.failedCount}.',
+        'FAILED' => 'فشل إرسال الإشعار. أعد المحاولة بالرسالة نفسها.',
+        'PENDING' => 'الإشعار قيد الإرسال.',
+        _ => 'تعذر إرسال الإشعار. حاول مرة أخرى.',
+      };
+
+  String _statusLabel(String status) => switch (status) {
+        'SENT' => 'تم الإرسال',
+        'PARTIAL' => 'أُرسل جزئياً',
+        'FAILED' => 'فشل',
+        'PENDING' => 'قيد الإرسال',
+        _ => status,
+      };
+
+  Widget _historyList() => FutureBuilder<List<NotificationBroadcast>>(
+        future: _history,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const LinearProgressIndicator();
+          }
+          final items = snapshot.data ?? const <NotificationBroadcast>[];
+          if (items.isEmpty) return const Text('لا توجد إشعارات سابقة.');
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final item in items.take(20))
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(item.title,
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  subtitle: Text(
+                      '${_statusLabel(item.status)} · ${item.sentCount} من ${item.recipientCount} جهاز'),
+                ),
+            ],
+          );
+        },
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -808,8 +900,29 @@ class _NotificationsAdminState extends State<NotificationsAdmin> {
               if (resultMessage != null) ...[
                 const SizedBox(height: 12),
                 Text(resultMessage!,
-                    style: const TextStyle(color: YallaColors.success)),
+                    style: TextStyle(
+                        color: resultIsError
+                            ? Theme.of(context).colorScheme.error
+                            : YallaColors.success)),
               ],
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 18),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('سجل الإشعارات',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 8),
+              _historyList(),
             ],
           ),
         ),
@@ -1484,10 +1597,14 @@ class _BannersAdminState extends State<BannersAdmin> {
     );
 
     try {
-      if (item == null) {
-        await widget.repository.createBanner(next);
-      } else {
-        await widget.repository.updateBanner(next);
+      final saved = item == null
+          ? await widget.repository.createBanner(next)
+          : await widget.repository.updateBanner(next);
+      final image = result.image;
+      if (image != null) {
+        await widget.repository.setBannerImage(saved.id, image);
+      } else if (result.removeImage) {
+        await widget.repository.removeBannerImage(saved.id);
       }
       await _refresh();
     } on YallaCashFailure catch (failure) {
@@ -1520,6 +1637,35 @@ class _BannersAdminState extends State<BannersAdmin> {
   }
 }
 
+/// Opens the file picker for a banner or product image. Returns the image, or
+/// an error message when the file is too large or not a supported type.
+Future<({StoreLogoUpload? image, String? error})> _pickImageFile() async {
+  final picked = await FilePicker.platform.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+    withData: true,
+  );
+  final file = (picked?.files ?? const <PlatformFile>[]).firstOrNull;
+  final bytes = file?.bytes;
+  if (file == null || bytes == null) return (image: null, error: null);
+  if (bytes.length > _maxStoreLogoBytes) {
+    return (image: null, error: 'حجم الصورة يجب ألا يتجاوز 300 KB.');
+  }
+  final extension = (file.extension ?? '').toLowerCase();
+  return (
+    image: StoreLogoUpload(
+      bytes: bytes,
+      contentType: switch (extension) {
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        'gif' => 'image/gif',
+        _ => 'image/jpeg',
+      },
+    ),
+    error: null,
+  );
+}
+
 class _BannerEditorResult {
   const _BannerEditorResult({
     required this.title,
@@ -1531,6 +1677,8 @@ class _BannerEditorResult {
     required this.endsAtText,
     required this.isActive,
     required this.governorateId,
+    this.image,
+    this.removeImage = false,
   });
 
   final String title;
@@ -1542,6 +1690,8 @@ class _BannerEditorResult {
   final String endsAtText;
   final bool isActive;
   final String governorateId;
+  final StoreLogoUpload? image;
+  final bool removeImage;
 }
 
 /// Add/edit banner prompt. Owns its TextEditingController lifecycle.
@@ -1568,6 +1718,21 @@ class _BannerEditorDialogState extends State<_BannerEditorDialog> {
       TextEditingController(text: widget.item?.subtitle ?? '');
   late final imageUrl =
       TextEditingController(text: widget.item?.imageUrl ?? '');
+  StoreLogoUpload? pendingImage;
+  String? imageError;
+  bool removeImage = false;
+
+  Future<void> _pickImage() async {
+    final result = await _pickImageFile();
+    if (!mounted) return;
+    setState(() {
+      imageError = result.error;
+      if (result.image != null) {
+        pendingImage = result.image;
+        removeImage = false;
+      }
+    });
+  }
   late final targetUrl =
       TextEditingController(text: widget.item?.targetUrl ?? '');
   late final order = TextEditingController(
@@ -1599,6 +1764,8 @@ class _BannerEditorDialogState extends State<_BannerEditorDialog> {
         title: title.text.trim(),
         subtitle: subtitle.text.trim(),
         imageUrl: imageUrl.text.trim(),
+        image: pendingImage,
+        removeImage: removeImage,
         targetUrl: targetUrl.text.trim(),
         displayOrder: int.tryParse(order.text) ?? widget.nextDisplayOrder,
         startsAtText: startsAt.text,
@@ -1626,6 +1793,44 @@ class _BannerEditorDialogState extends State<_BannerEditorDialog> {
                     controller: subtitle,
                     decoration:
                         const InputDecoration(labelText: 'العنوان الفرعي')),
+                const SizedBox(height: 10),
+                Row(children: [
+                  if (pendingImage != null) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: SizedBox(
+                        width: 96,
+                        height: 54,
+                        child: Image.memory(
+                            Uint8List.fromList(pendingImage!.bytes),
+                            fit: BoxFit.cover),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Wrap(spacing: 8, runSpacing: 8, children: [
+                      OutlinedButton.icon(
+                          onPressed: _pickImage,
+                          icon: const Icon(Icons.image_outlined),
+                          label: const Text('رفع صورة')),
+                      if (pendingImage != null || widget.item != null)
+                        TextButton(
+                            onPressed: () => setState(() {
+                                  pendingImage = null;
+                                  removeImage = true;
+                                }),
+                            child: const Text('إزالة الصورة المرفوعة')),
+                    ]),
+                  ),
+                ]),
+                if (imageError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(imageError!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
+                  ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: imageUrl,
@@ -1814,7 +2019,9 @@ class StoresAdmin extends StatelessWidget {
 
   Future<void> _create(BuildContext context) async {
     final created = await _showStoreEditor(context, repository: repository);
-    if (created != null) await cubit.createStore(created);
+    if (created != null) {
+      await cubit.createStore(created.store, logo: created.logo);
+    }
   }
 }
 
@@ -1900,7 +2107,13 @@ class _StoreAdminCardState extends State<_StoreAdminCard> {
   Future<void> _edit(BuildContext context) async {
     final updated = await _showStoreEditor(context,
         partner: widget.partner, repository: widget.repository);
-    if (updated != null) await widget.cubit.updateStore(updated);
+    if (updated != null) {
+      await widget.cubit.updateStore(
+        updated.store,
+        logo: updated.logo,
+        removeLogo: updated.removeLogo,
+      );
+    }
   }
 
   Future<void> _delete() async {
@@ -1941,7 +2154,23 @@ class _StoreAdminCardState extends State<_StoreAdminCard> {
   }
 }
 
-Future<PartnerStore?> _showStoreEditor(
+/// Largest logo the editor accepts; the backend enforces the same limit.
+const int _maxStoreLogoBytes = 300 * 1024;
+
+/// Result of the store editor: the store fields plus any logo change.
+class _StoreEditorResult {
+  const _StoreEditorResult({
+    required this.store,
+    this.logo,
+    this.removeLogo = false,
+  });
+
+  final PartnerStore store;
+  final StoreLogoUpload? logo;
+  final bool removeLogo;
+}
+
+Future<_StoreEditorResult?> _showStoreEditor(
   BuildContext context, {
   required YallaCashRepository repository,
   PartnerStore? partner,
@@ -1964,7 +2193,7 @@ Future<PartnerStore?> _showStoreEditor(
   }
   // The editor dialog owns its TextEditingControllers and builds the
   // resulting PartnerStore itself; no controller outlives the dialog route.
-  return showDialog<PartnerStore>(
+  return showDialog<_StoreEditorResult>(
     context: context,
     builder: (_) =>
         _StoreEditorDialog(partner: partner, governorates: governorates),
@@ -1995,6 +2224,57 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
   // new store, which the admin must explicitly choose before saving.
   String? governorateChoice;
   String? governorateError;
+  StoreLogoUpload? pendingLogo;
+  String? logoError;
+  bool removeLogo = false;
+
+  bool get _hasLogo =>
+      pendingLogo != null ||
+      (!removeLogo && widget.partner?.logoUrl != null);
+
+  Future<void> _pickLogo() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+      withData: true,
+    );
+    final file = (picked?.files ?? const <PlatformFile>[]).firstOrNull;
+    final bytes = file?.bytes;
+    if (file == null || bytes == null) return;
+    if (bytes.length > _maxStoreLogoBytes) {
+      setState(() => logoError = 'حجم الشعار يجب ألا يتجاوز 300 KB.');
+      return;
+    }
+    final extension = (file.extension ?? '').toLowerCase();
+    setState(() {
+      pendingLogo = StoreLogoUpload(
+        bytes: bytes,
+        contentType: switch (extension) {
+          'png' => 'image/png',
+          'webp' => 'image/webp',
+          _ => 'image/jpeg',
+        },
+      );
+      removeLogo = false;
+      logoError = null;
+    });
+  }
+
+  Widget _logoPreview() {
+    final pending = pendingLogo;
+    final url = removeLogo ? null : widget.partner?.logoUrl;
+    final fallback = Icon(AdminSection.stores.icon);
+    final Widget image = pending != null
+        ? Image.memory(Uint8List.fromList(pending.bytes), fit: BoxFit.cover)
+        : url != null
+            ? Image.network(url,
+                fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback)
+            : fallback;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(width: 72, height: 72, child: image),
+    );
+  }
 
   @override
   void initState() {
@@ -2025,17 +2305,21 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
     final now = DateTime.now().microsecondsSinceEpoch;
     Navigator.pop(
       context,
-      PartnerStore(
-        id: widget.partner?.id ?? 'store-$now',
-        name: name.text.trim(),
-        category: category.text.trim(),
-        commissionRate:
-            double.tryParse(rate.text) ?? widget.partner?.commissionRate ?? 0,
-        description: description.text.trim(),
-        location: location.text.trim(),
-        iconSeed: widget.partner?.iconSeed ?? now.remainder(100000),
-        governorateId: selectedGovernorateId,
-        isActive: widget.partner?.isActive ?? true,
+      _StoreEditorResult(
+        store: PartnerStore(
+          id: widget.partner?.id ?? 'store-$now',
+          name: name.text.trim(),
+          category: category.text.trim(),
+          commissionRate:
+              double.tryParse(rate.text) ?? widget.partner?.commissionRate ?? 0,
+          description: description.text.trim(),
+          location: location.text.trim(),
+          iconSeed: widget.partner?.iconSeed ?? now.remainder(100000),
+          governorateId: selectedGovernorateId,
+          isActive: widget.partner?.isActive ?? true,
+        ),
+        logo: pendingLogo,
+        removeLogo: removeLogo,
       ),
     );
   }
@@ -2047,6 +2331,33 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
           width: 520,
           child: SingleChildScrollView(
             child: Column(children: [
+              Row(children: [
+                _logoPreview(),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Wrap(spacing: 8, runSpacing: 8, children: [
+                    OutlinedButton.icon(
+                        onPressed: _pickLogo,
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('اختيار شعار')),
+                    if (_hasLogo)
+                      TextButton(
+                          onPressed: () => setState(() {
+                                pendingLogo = null;
+                                removeLogo = true;
+                              }),
+                          child: const Text('إزالة الشعار')),
+                  ]),
+                ),
+              ]),
+              if (logoError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(logoError!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
+                ),
+              const SizedBox(height: 14),
               TextField(
                   controller: name,
                   decoration: const InputDecoration(labelText: 'اسم المحل')),
@@ -2149,24 +2460,45 @@ class ProductsAdmin extends StatelessWidget {
 
   Future<void> _editProduct(
       BuildContext context, DigitalProduct product) async {
-    final updated = await showDialog<DigitalProduct>(
+    final updated = await showDialog<_ProductEditorResult>(
       context: context,
       builder: (_) => _ProductEditorDialog(product: product),
     );
-    if (updated != null) await cubit.updateProduct(updated);
+    if (updated != null) {
+      await cubit.updateProduct(
+        updated.product,
+        image: updated.image,
+        removeImage: updated.removeImage,
+      );
+    }
   }
 
   Future<void> _createProduct(BuildContext context) async {
     final created = await _showProductEditor(context);
-    if (created != null) await cubit.createProduct(created);
+    if (created != null) {
+      await cubit.createProduct(created.product, image: created.image);
+    }
   }
 }
 
-Future<DigitalProduct?> _showProductEditor(
+/// Result of the product editor: the product fields plus any image change.
+class _ProductEditorResult {
+  const _ProductEditorResult({
+    required this.product,
+    this.image,
+    this.removeImage = false,
+  });
+
+  final DigitalProduct product;
+  final StoreLogoUpload? image;
+  final bool removeImage;
+}
+
+Future<_ProductEditorResult?> _showProductEditor(
   BuildContext context, [
   DigitalProduct? product,
 ]) {
-  return showDialog<DigitalProduct>(
+  return showDialog<_ProductEditorResult>(
     context: context,
     builder: (_) => _ProductEditorDialog(product: product),
   );
@@ -2188,6 +2520,9 @@ class _ProductEditorDialogState extends State<_ProductEditorDialog> {
       TextEditingController(text: widget.product?.costInPoints.toString());
   late var needsPhone = widget.product?.requiresPhoneNumber ?? false;
   late var active = widget.product?.isActive ?? true;
+  StoreLogoUpload? pendingImage;
+  String? imageError;
+  bool removeImage = false;
 
   @override
   void dispose() {
@@ -2196,18 +2531,73 @@ class _ProductEditorDialogState extends State<_ProductEditorDialog> {
     super.dispose();
   }
 
+  bool get _hasImage =>
+      pendingImage != null ||
+      (!removeImage && widget.product?.imageUrl != null);
+
+  Future<void> _pickImage() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+      withData: true,
+    );
+    final file = (picked?.files ?? const <PlatformFile>[]).firstOrNull;
+    final bytes = file?.bytes;
+    if (file == null || bytes == null) return;
+    if (bytes.length > _maxStoreLogoBytes) {
+      setState(() => imageError = 'حجم الصورة يجب ألا يتجاوز 300 KB.');
+      return;
+    }
+    final extension = (file.extension ?? '').toLowerCase();
+    setState(() {
+      pendingImage = StoreLogoUpload(
+        bytes: bytes,
+        contentType: switch (extension) {
+          'png' => 'image/png',
+          'webp' => 'image/webp',
+          _ => 'image/jpeg',
+        },
+      );
+      removeImage = false;
+      imageError = null;
+    });
+  }
+
+  Widget _imagePreview() {
+    final pending = pendingImage;
+    final url = removeImage ? null : widget.product?.imageUrl;
+    final fallback = Icon(Icons.redeem_rounded, color: Colors.grey.shade600);
+    final Widget image = pending != null
+        ? Image.memory(Uint8List.fromList(pending.bytes), fit: BoxFit.cover)
+        : url != null
+            ? Image.network(url,
+                fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback)
+            : fallback;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: ColoredBox(
+        color: Colors.grey.shade200,
+        child: SizedBox(width: 72, height: 72, child: Center(child: image)),
+      ),
+    );
+  }
+
   void _save() {
     final now = DateTime.now().microsecondsSinceEpoch;
     Navigator.pop(
       context,
-      DigitalProduct(
-        id: widget.product?.id ?? 'product-$now',
-        name: name.text.trim(),
-        costInPoints:
-            int.tryParse(cost.text) ?? widget.product?.costInPoints ?? 0,
-        iconSeed: widget.product?.iconSeed ?? now.remainder(100000),
-        requiresPhoneNumber: needsPhone,
-        isActive: active,
+      _ProductEditorResult(
+        product: DigitalProduct(
+          id: widget.product?.id ?? 'product-$now',
+          name: name.text.trim(),
+          costInPoints:
+              int.tryParse(cost.text) ?? widget.product?.costInPoints ?? 0,
+          iconSeed: widget.product?.iconSeed ?? now.remainder(100000),
+          requiresPhoneNumber: needsPhone,
+          isActive: active,
+        ),
+        image: pendingImage,
+        removeImage: removeImage,
       ),
     );
   }
@@ -2218,6 +2608,33 @@ class _ProductEditorDialogState extends State<_ProductEditorDialog> {
         content: SizedBox(
           width: 460,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              _imagePreview(),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                      onPressed: _pickImage,
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('اختيار صورة')),
+                  if (_hasImage)
+                    TextButton(
+                        onPressed: () => setState(() {
+                              pendingImage = null;
+                              removeImage = true;
+                            }),
+                        child: const Text('إزالة الصورة')),
+                ]),
+              ),
+            ]),
+            if (imageError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(imageError!,
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error)),
+              ),
+            const SizedBox(height: 12),
             TextField(
                 controller: name,
                 decoration: const InputDecoration(labelText: 'اسم المنتج')),
@@ -2355,6 +2772,7 @@ class SettlementsAdmin extends StatelessWidget {
         const _PageTitle(
             title: 'التحاسب الشهري',
             subtitle: 'إجمالي المبيعات والعمولة المستحقة لكل محل'),
+        MonthlySettlementCard(cubit: cubit),
         const SizedBox(height: 18),
         _TableCard(
           child: DataTable(
@@ -2390,36 +2808,242 @@ class SettlementsAdmin extends StatelessWidget {
       ]);
 }
 
+/// Monthly settlement for ALL merchants of one completed calendar month. The
+/// admin sees the count and totals first, confirms, then reads the result.
+class MonthlySettlementCard extends StatefulWidget {
+  const MonthlySettlementCard({required this.cubit, super.key});
+
+  final AdminAppCubit cubit;
+
+  @override
+  State<MonthlySettlementCard> createState() => _MonthlySettlementCardState();
+}
+
+class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
+  late final List<String> _months = _completedMonths(DateTime.now());
+  late String _selected = _months.first;
+  late Future<List<MonthlySettlementRecord>> _history =
+      widget.cubit.listMonthlySettlementHistory();
+  bool _busy = false;
+
+  /// The 12 most recent calendar months that are already over (YYYY-MM).
+  static List<String> _completedMonths(DateTime now) => [
+        for (var i = 1; i <= 12; i++)
+          () {
+            final date = DateTime.utc(now.year, now.month - i, 1);
+            return '${date.year}-${date.month.toString().padLeft(2, '0')}';
+          }(),
+      ];
+
+  String _label(String month) {
+    final parts = month.split('-');
+    return '${parts[1]}/${parts[0]}';
+  }
+
+  Future<void> _settle() async {
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final preview = await widget.cubit.previewMonthlySettlement(_selected);
+      if (!mounted) return;
+      if (preview == null) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('تعذر تحميل معاينة التسوية الشهرية.')));
+        return;
+      }
+      if (preview.openMerchantCount == 0) {
+        messenger.showSnackBar(SnackBar(
+            content: Text('لا توجد فواتير غير مسددة لشهر ${_label(_selected)}.')));
+        return;
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('تأكيد التسوية الشهرية'),
+          content: Text(
+              'شهر ${_label(_selected)}\n'
+              'عدد التجار: ${preview.openMerchantCount}\n'
+              'إجمالي المبيعات: ${formatNumber(preview.totalSalesSyp)} ل.س\n'
+              'إجمالي العمولة المستحقة: ${formatNumber(preview.totalCommissionSyp)} ل.س\n\n'
+              'تُسوّى الفواتير غير المسددة فقط. لا يمكن التراجع عن التسوية.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('إلغاء')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('تأكيد التسوية')),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+
+      final result = await widget.cubit.runMonthlySettlement(_selected);
+      if (!mounted) return;
+      if (result == null) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('تعذر إتمام التسوية الشهرية. حاول مرة أخرى.')));
+        return;
+      }
+      final failed = result.merchants
+          .where((merchant) => merchant.status == 'failed')
+          .map((merchant) => merchant.storeName)
+          .join('، ');
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('نتيجة التسوية الشهرية'),
+          content: Text(
+              'تمت تسوية ${result.settledCount} تاجراً بإجمالي عمولة '
+              '${formatNumber(result.totalCommissionSyp)} ل.س.\n'
+              'تم تخطي ${result.skippedCount} (مسددة سابقاً).\n'
+              'فشل ${result.failedCount}${failed.isEmpty ? '' : ': $failed'}.'),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('حسناً')),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _history = widget.cubit.listMonthlySettlementHistory());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return _TableCard(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('التسوية الشهرية لكل التجار',
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text('تسوّي الفواتير غير المسددة لشهر مكتمل دفعة واحدة.',
+                style: theme.textTheme.bodySmall),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _selected,
+                  decoration: const InputDecoration(labelText: 'الشهر'),
+                  items: [
+                    for (final month in _months)
+                      DropdownMenuItem(value: month, child: Text(_label(month))),
+                  ],
+                  onChanged: _busy
+                      ? null
+                      : (value) => setState(() => _selected = value ?? _selected),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton.icon(
+                onPressed: _busy ? null : _settle,
+                icon: _busy
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.account_balance_wallet_outlined),
+                label: const Text('تسوية كل التجار'),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            Text('سجل التسويات الشهرية',
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w800)),
+            FutureBuilder<List<MonthlySettlementRecord>>(
+              future: _history,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const LinearProgressIndicator();
+                }
+                final items = snapshot.data ?? const <MonthlySettlementRecord>[];
+                if (items.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('لا توجد تسويات شهرية بعد.'),
+                  );
+                }
+                return Column(
+                  children: [
+                    for (final item in items.take(12))
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('${item.storeName} · ${_label(item.month)}',
+                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                        subtitle: Text(
+                            '${formatNumber(item.commissionDueSyp)} ل.س عمولة · '
+                            '${item.transactionCount} عملية'),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsAdmin extends StatefulWidget {
   const SettingsAdmin({
     required this.cubit,
     required this.pointValueSyp,
+    this.minCashWithdrawalSyp,
+    this.shareRewardPoints,
     super.key,
   });
 
   final AdminAppCubit cubit;
-  final int? pointValueSyp;
+  final double? pointValueSyp;
+  final int? minCashWithdrawalSyp;
+  final int? shareRewardPoints;
 
   @override
   State<SettingsAdmin> createState() => _SettingsAdminState();
 }
 
+/// Shows whole values without a trailing ".0" (e.g. 5 not 5.0).
+String _formatPointValue(double value) =>
+    value == value.roundToDouble() ? value.toInt().toString() : '$value';
+
 class _SettingsAdminState extends State<SettingsAdmin> {
-  late final controller =
-      TextEditingController(text: (widget.pointValueSyp ?? 1).toString());
+  late final controller = TextEditingController(
+      text: _formatPointValue(widget.pointValueSyp ?? 1));
+  late final minCashController = TextEditingController(
+      text: (widget.minCashWithdrawalSyp ?? 0).toString());
+  late final shareRewardController = TextEditingController(
+      text: (widget.shareRewardPoints ?? 0).toString());
 
   @override
   void didUpdateWidget(covariant SettingsAdmin oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pointValueSyp != widget.pointValueSyp &&
         widget.pointValueSyp != null) {
-      controller.text = widget.pointValueSyp.toString();
+      controller.text = _formatPointValue(widget.pointValueSyp!);
+    }
+    if (oldWidget.minCashWithdrawalSyp != widget.minCashWithdrawalSyp &&
+        widget.minCashWithdrawalSyp != null) {
+      minCashController.text = widget.minCashWithdrawalSyp.toString();
+    }
+    if (oldWidget.shareRewardPoints != widget.shareRewardPoints &&
+        widget.shareRewardPoints != null) {
+      shareRewardController.text = widget.shareRewardPoints.toString();
     }
   }
 
   @override
   void dispose() {
     controller.dispose();
+    minCashController.dispose();
+    shareRewardController.dispose();
     super.dispose();
   }
 
@@ -2439,7 +3063,8 @@ class _SettingsAdminState extends State<SettingsAdmin> {
                   children: [
                     TextField(
                         controller: controller,
-                        keyboardType: TextInputType.number,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
                         decoration: const InputDecoration(
                             labelText: 'قيمة النقطة نقداً', suffixText: 'ل.س')),
                     const SizedBox(height: 10),
@@ -2453,10 +3078,101 @@ class _SettingsAdminState extends State<SettingsAdmin> {
             ),
           ),
         ),
+        const SizedBox(height: 14),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                        controller: minCashController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'الحد الأدنى لسحب الكاش',
+                            suffixText: 'ل.س')),
+                    const SizedBox(height: 10),
+                    Text(
+                        'صفر يعني بلا حد أدنى. لا يُطبَّق على طلبات الاستبدال الحالية.',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                        onPressed: _saveMinCashWithdrawal,
+                        child: const Text('حفظ الحد الأدنى')),
+                  ]),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                        controller: shareRewardController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'مكافأة مشاركة التطبيق',
+                            suffixText: 'نقطة')),
+                    const SizedBox(height: 10),
+                    Text(
+                        'تُمنح مرة واحدة لكل حساب زبون. صفر يعني إيقاف المكافأة.',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                        onPressed: _saveShareReward,
+                        child: const Text('حفظ مكافأة المشاركة')),
+                  ]),
+            ),
+          ),
+        ),
       ]);
 
+  Future<void> _saveShareReward() async {
+    final value = int.tryParse(shareRewardController.text.trim());
+    if (value == null || value < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('أدخل عدد نقاط صحيحاً (صفر لإيقاف المكافأة).')));
+      return;
+    }
+    final saved = await widget.cubit.updateShareRewardPoints(value);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(saved
+            ? 'تم حفظ مكافأة المشاركة.'
+            : 'تعذر حفظ مكافأة المشاركة. حاول مرة أخرى.'),
+      ),
+    );
+  }
+
+  Future<void> _saveMinCashWithdrawal() async {
+    final value = int.tryParse(minCashController.text.trim());
+    if (value == null || value < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('أدخل مبلغاً صحيحاً بالليرة السورية.')));
+      return;
+    }
+    final saved = await widget.cubit.updateMinCashWithdrawal(value);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(saved
+            ? 'تم حفظ الحد الأدنى لسحب الكاش.'
+            : 'تعذر حفظ الحد الأدنى. حاول مرة أخرى.'),
+      ),
+    );
+  }
+
   Future<void> _save() async {
-    final value = int.tryParse(controller.text) ?? 0;
+    final value =
+        double.tryParse(controller.text.trim().replaceAll(',', '.')) ?? 0;
     if (value <= 0) return;
     // Only report success when the backend update actually succeeded
     // (AdminAppCubit.updatePointValue returns false on any failure).

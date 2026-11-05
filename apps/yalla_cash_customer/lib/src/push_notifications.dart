@@ -1,0 +1,51 @@
+import 'dart:async';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+/// Background and closed-app messages are displayed by the platform from the
+/// FCM "notification" payload, so this handler only needs to be registered.
+@pragma('vm:entry-point')
+Future<void> firebaseBackgroundMessageHandler(RemoteMessage message) async {}
+
+/// Requests notification permission, registers the device token, keeps it
+/// fresh, and forwards foreground messages to the app.
+class CustomerPushNotifications {
+  StreamSubscription<String>? _tokenSubscription;
+  StreamSubscription<RemoteMessage>? _messageSubscription;
+
+  Future<void> start({
+    required Future<void> Function(String token) register,
+    required void Function(RemoteMessage message) onForegroundMessage,
+  }) async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      await messaging.requestPermission(alert: true, badge: true, sound: true);
+      final token = await messaging.getToken();
+      if (token != null) await register(token);
+      _tokenSubscription ??= messaging.onTokenRefresh.listen(register);
+      _messageSubscription ??=
+          FirebaseMessaging.onMessage.listen(onForegroundMessage);
+    } on Object {
+      // Push is an enhancement: the app keeps working without it.
+    }
+  }
+
+  Future<void> stop() async {
+    await _tokenSubscription?.cancel();
+    await _messageSubscription?.cancel();
+    _tokenSubscription = null;
+    _messageSubscription = null;
+  }
+
+  /// Sign-out: stops listeners and deletes the local FCM token, so this device
+  /// stops receiving pushes for the account that just signed out. Best-effort;
+  /// the backend also drops tokens FCM rejects.
+  Future<void> signOut() async {
+    await stop();
+    try {
+      await FirebaseMessaging.instance.deleteToken();
+    } on Object {
+      // Firebase may be unavailable; sign-out must still complete.
+    }
+  }
+}

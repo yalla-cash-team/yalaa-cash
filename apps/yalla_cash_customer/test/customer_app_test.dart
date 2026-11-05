@@ -11,6 +11,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: CustomerHomePage(
+          cubit: CustomerAppCubit(InMemoryYallaCashRepository(store)),
           state: const CustomerAppState(),
           customer: store.currentCustomer!,
         ),

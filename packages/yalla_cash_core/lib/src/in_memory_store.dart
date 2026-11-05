@@ -207,7 +207,17 @@ class YallaCashStore extends ChangeNotifier {
 
   Customer? currentCustomer;
   MerchantAccount? currentMerchant;
-  int pointValueSyp = 5;
+  double pointValueSyp = 5;
+  int minCashWithdrawalSyp = 0;
+  int shareRewardPoints = 0;
+
+  void updateShareRewardPoints(int value) {
+    if (value < 0) throw ArgumentError.value(value, 'value');
+    shareRewardPoints = value;
+    notifyListeners();
+  }
+  // Earned value not yet converted into whole points, per customer (1/10000 SYP).
+  final Map<String, int> _pointRemainderScaled = {};
 
   UnmodifiableListView<Customer> get customers =>
       UnmodifiableListView(_customers);
@@ -352,7 +362,13 @@ class YallaCashStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updatePointValue(int value) {
+  void updateMinCashWithdrawal(int value) {
+    if (value < 0) throw ArgumentError.value(value, 'value');
+    minCashWithdrawalSyp = value;
+    notifyListeners();
+  }
+
+  void updatePointValue(double value) {
     if (value <= 0) throw ArgumentError.value(value, 'value');
     pointValueSyp = value;
     notifyListeners();
@@ -515,6 +531,7 @@ class YallaCashStore extends ChangeNotifier {
       invoiceAmountSyp: amountSyp,
       commissionRate: store.commissionRate,
       pointValueSyp: pointValueSyp,
+      carriedRemainderScaled: _pointRemainderScaled[customerId] ?? 0,
     );
     final transaction = LoyaltyTransaction(
       id: 'tx-${DateTime.now().microsecondsSinceEpoch}',
@@ -530,6 +547,7 @@ class YallaCashStore extends ChangeNotifier {
       createdAt: DateTime.now(),
     );
     _transactions.insert(0, transaction);
+    _pointRemainderScaled[customerId] = result.customerRemainderScaled;
     final customer = _customers[customerIndex];
     _customers[customerIndex] = customer.copyWith(
       pointsBalance: customer.pointsBalance + result.customerPoints,
@@ -548,11 +566,18 @@ class YallaCashStore extends ChangeNotifier {
     if (points <= 0 || points > availablePoints(customerId)) {
       throw ArgumentError.value(points, 'points');
     }
+    if (!CommissionCalculator.isWholeCashValue(points, pointValueSyp)) {
+      throw ArgumentError.value(
+        points,
+        'points',
+        'must convert to whole SYP',
+      );
+    }
     final request = CashRedemptionRequest(
       id: 'cash-${DateTime.now().microsecondsSinceEpoch}',
       customerId: customerId,
       pointsRequested: points,
-      cashValueSyp: points * pointValueSyp,
+      cashValueSyp: CommissionCalculator.cashValueFor(points, pointValueSyp),
       status: CashRequestStatus.pending,
       createdAt: DateTime.now(),
     );

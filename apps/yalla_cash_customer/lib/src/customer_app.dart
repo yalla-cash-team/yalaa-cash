@@ -3,10 +3,14 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Banner;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:yalla_cash_core/yalla_cash_core.dart' hide Banner;
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:yalla_cash_customer/src/push_notifications.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:yalla_cash_core/yalla_cash_core.dart';
 
 class YallaCashCustomerApp extends StatefulWidget {
   const YallaCashCustomerApp({
@@ -36,11 +40,18 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
       : CustomerAppCubit(repository);
   ThemeMode themeMode = ThemeMode.light;
   bool restoringSession = false;
+  final CustomerPushNotifications _push = CustomerPushNotifications();
+  final GlobalKey<ScaffoldMessengerState> _messengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+  StreamSubscription<CustomerAppState>? _customerSubscription;
+  bool _pushActive = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _customerSubscription = customerCubit.stream.listen(_syncPush);
+    _syncPush(customerCubit.state);
     if (widget.store == null && runtime?.demoStore == null) {
       restoringSession = true;
       unawaited(_restoreSession());
@@ -65,9 +76,38 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
     }
   }
 
+  /// Push starts once a customer is signed in and stops on sign-out, so the
+  /// device token is registered only for the account that is using the app.
+  void _syncPush(CustomerAppState state) {
+    final signedIn = state.customer != null;
+    if (signedIn && !_pushActive) {
+      _pushActive = true;
+      unawaited(_push.start(
+        register: customerCubit.registerDeviceToken,
+        onForegroundMessage: _showForegroundMessage,
+      ));
+    } else if (!signedIn && _pushActive) {
+      _pushActive = false;
+      unawaited(_push.signOut());
+    }
+  }
+
+  // Android does not display notifications while the app is open, so they
+  // are shown here as a snackbar.
+  void _showForegroundMessage(RemoteMessage message) {
+    final text = [message.notification?.title, message.notification?.body]
+        .whereType<String>()
+        .where((part) => part.isNotEmpty)
+        .join('\n');
+    if (text.isEmpty) return;
+    _messengerKey.currentState?.showSnackBar(SnackBar(content: Text(text)));
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _customerSubscription?.cancel();
+    unawaited(_push.stop());
     customerCubit.close();
     if (widget.store == null && widget.runtime == null) {
       runtime?.dispose();
@@ -87,6 +127,7 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'يلا كاش',
+          scaffoldMessengerKey: _messengerKey,
           theme: buildYallaTheme(Brightness.light),
           darkTheme: buildYallaTheme(Brightness.dark),
           themeMode: themeMode,
@@ -277,16 +318,6 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
                   if (method == null) ...[
                     _Entrance(
                       animation: _buttonEntrance(.32, .59),
-                      child: _AuthChoice(
-                        icon: Icons.facebook,
-                        label: 'المتابعة عبر فيسبوك',
-                        onTap: () => _showUnavailable(
-                            'تسجيل الدخول عبر فيسبوك غير مفعّل بعد. يلزم إعداد Firebase وربط تطبيق فيسبوك.'),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _Entrance(
-                      animation: _buttonEntrance(.39, .66),
                       child: _AuthChoice(
                         icon: Icons.mail_outline_rounded,
                         label: 'المتابعة عبر جيميل',
@@ -495,7 +526,9 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
         isLoading = false;
         errorMessage = null;
       });
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint('GOOGLE_SIGN_IN_FAILED: $error');
+      debugPrintStack(stackTrace: stackTrace);
       if (!mounted) return;
       setState(() => isLoading = false);
       _showUnavailable('تعذر تسجيل الدخول عبر جوجل. حاول مرة أخرى.');
@@ -975,11 +1008,14 @@ class _CustomerShellState extends State<CustomerShell> {
   Widget build(BuildContext context) {
     final customer = widget.state.customer!;
     final pages = [
-      CustomerHomePage(state: widget.state, customer: customer),
+      CustomerHomePage(
+          cubit: widget.cubit, state: widget.state, customer: customer),
       CustomerQrPage(
           cubit: widget.cubit, state: widget.state, customer: customer),
       CustomerWalletPage(
-          transactions: widget.state.transactions, customer: customer),
+          transactions: widget.state.transactions,
+          customer: customer,
+          productRedemptions: widget.state.productRedemptions),
       CustomerRewardsPage(cubit: widget.cubit, state: widget.state),
     ];
 
@@ -1035,15 +1071,21 @@ class _CustomerShellState extends State<CustomerShell> {
                   leading: Icon(Icons.language_rounded),
                   title: Text('اللغة'),
                   trailing: Text('العربية')),
-              const ListTile(
-                  leading: Icon(Icons.message_outlined),
-                  title: Text('تواصل معنا')),
-              const ListTile(
-                  leading: Icon(Icons.star_outline_rounded),
-                  title: Text('قيّم التطبيق')),
-              const ListTile(
-                  leading: Icon(Icons.share_outlined),
-                  title: Text('مشاركة التطبيق')),
+              ListTile(
+                  leading: const Icon(Icons.message_outlined),
+                  title: const Text('تواصل معنا'),
+                  onTap: _contactUsOnWhatsApp),
+              ListTile(
+                  leading: const Icon(Icons.star_outline_rounded),
+                  title: const Text('قيّم التطبيق'),
+                  onTap: _rateAppOnGooglePlay),
+              ListTile(
+                  leading: const Icon(Icons.card_giftcard_rounded),
+                  title: const Text('ادعُ أصدقاءك واربح نقاط'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showShareSheet(context);
+                  }),
               const Divider(),
               ListTile(
                 leading: Icon(Icons.logout_rounded,
@@ -1122,6 +1164,137 @@ class _CustomerShellState extends State<CustomerShell> {
       ),
     );
   }
+
+  Future<void> _contactUsOnWhatsApp() async {
+    final uri = Uri.parse('https://wa.me/963998111295');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _showShareSheet(BuildContext context) =>
+      showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (_) => _ShareAppSheet(cubit: widget.cubit),
+      );
+
+  Future<void> _rateAppOnGooglePlay() async {
+    const marketUri = 'market://details?id=com.yallacash.app';
+    const webUri =
+        'https://play.google.com/store/apps/details?id=com.yallacash.app';
+    if (await canLaunchUrl(Uri.parse(marketUri))) {
+      await launchUrl(Uri.parse(marketUri),
+          mode: LaunchMode.externalApplication);
+      return;
+    }
+    await launchUrl(Uri.parse(webUri), mode: LaunchMode.externalApplication);
+  }
+}
+
+/// Invitation text and official Play Store link (same app id as "rate us").
+const _shareAppMessage =
+    'حمّل تطبيق يلا كاش واستبدل نقاطك بكاش! '
+    'https://play.google.com/store/apps/details?id=com.yallacash.app';
+
+/// Share sheet opened from the drawer. It shares the app and asks the server
+/// for the one-time share reward.
+class _ShareAppSheet extends StatefulWidget {
+  const _ShareAppSheet({required this.cubit});
+
+  final CustomerAppCubit cubit;
+
+  @override
+  State<_ShareAppSheet> createState() => _ShareAppSheetState();
+}
+
+class _ShareAppSheetState extends State<_ShareAppSheet> {
+  // Blocks a second tap while the share sheet or claim request is running.
+  bool _sharing = false;
+
+  Future<void> _share() async {
+    if (_sharing) return;
+    setState(() => _sharing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final shared = await Share.share(
+        _shareAppMessage,
+        subject: 'تطبيق يلا كاش',
+      );
+      // Delivery cannot be verified (Android and web usually report
+      // "unavailable"), so any action other than a dismissed sheet counts.
+      // The server still grants the reward only once per account.
+      if (shared.status == ShareResultStatus.dismissed) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('لم تكتمل عملية المشاركة.')));
+        return;
+      }
+      final reward = await widget.cubit.claimShareReward();
+      messenger.showSnackBar(SnackBar(content: Text(_rewardMessage(reward))));
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
+
+  String _rewardMessage(ShareRewardResult? reward) => switch (reward?.status) {
+        'granted' =>
+          'شكراً لمشاركتك! أضفنا ${reward!.pointsAwarded} نقطة إلى رصيدك.',
+        'already_claimed' => 'حصلت على مكافأة المشاركة من قبل.',
+        'disabled' => 'مكافأة المشاركة غير متاحة حالياً.',
+        _ => 'تعذر تسجيل المكافأة الآن. حاول لاحقاً.',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              width: 76,
+              height: 76,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.card_giftcard_rounded,
+                  size: 38, color: scheme.primary),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'ادعُ أصدقاءك واربح نقاط',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'شارك تطبيق يلا كاش مع أصدقائك. تحصل على نقاط مكافأة عند مشاركتك الأولى، وتُمنح المكافأة مرة واحدة لكل حساب.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _sharing ? null : _share,
+              icon: _sharing
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.share_rounded),
+              label: Text(_sharing ? 'جارٍ المشاركة...' : 'شارك الآن'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Home page renders everything from [CustomerAppState] — including banners,
@@ -1129,9 +1302,14 @@ class _CustomerShellState extends State<CustomerShell> {
 /// latest admin-managed content (previously banners were fetched once into
 /// local widget state and never refreshed).
 class CustomerHomePage extends StatelessWidget {
-  const CustomerHomePage(
-      {required this.state, required this.customer, super.key});
+  const CustomerHomePage({
+    required this.cubit,
+    required this.state,
+    required this.customer,
+    super.key,
+  });
 
+  final CustomerAppCubit cubit;
   final CustomerAppState state;
   final Customer customer;
 
@@ -1141,9 +1319,6 @@ class CustomerHomePage extends StatelessWidget {
     final stores =
         state.stores.where((store) => store.isActive).toList(growable: false);
     final banners = state.banners;
-    final bannerHeight = (MediaQuery.sizeOf(context).width * 0.37)
-        .clamp(148.0, 156.0)
-        .toDouble();
     return ListView(
       key: const PageStorageKey('customer-home'),
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 24),
@@ -1151,84 +1326,7 @@ class CustomerHomePage extends StatelessWidget {
         _BalanceCard(points: points),
         const SizedBox(height: 18),
         if (banners.isNotEmpty)
-          SizedBox(
-            height: bannerHeight,
-            child: PageView.builder(
-              itemCount: banners.length,
-              itemBuilder: (context, index) {
-                final banner = banners[index];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(22),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.network(banner.imageUrl, fit: BoxFit.cover),
-                        Positioned.fill(
-                          child: Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: FractionallySizedBox(
-                              widthFactor: 0.72,
-                              alignment: AlignmentDirectional.centerStart,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: AlignmentDirectional.centerStart,
-                                    end: AlignmentDirectional.centerEnd,
-                                    colors: [
-                                      Colors.black.withValues(alpha: 0.42),
-                                      Colors.black.withValues(alpha: 0.18),
-                                      Colors.transparent,
-                                    ],
-                                    stops: const [0, 0.58, 1],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          right: 18,
-                          bottom: 18,
-                          left: 18,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(banner.title,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w900,
-                                      shadows: [
-                                        Shadow(
-                                          color: Color(0x99000000),
-                                          blurRadius: 12,
-                                          offset: Offset(0, 2),
-                                        ),
-                                      ])),
-                              if (banner.subtitle != null)
-                                Text(banner.subtitle!,
-                                    style: const TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 12,
-                                        shadows: [
-                                          Shadow(
-                                            color: Color(0x80000000),
-                                            blurRadius: 10,
-                                            offset: Offset(0, 1),
-                                          ),
-                                        ])),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          _HomeBannerCarousel(banners: banners),
         const SizedBox(height: 22),
         const _SectionTitle('المحلات الحصرية بمدينتك'),
         const SizedBox(height: 10),
@@ -1244,6 +1342,170 @@ class CustomerHomePage extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Banner artwork is designed at 1200 x 500 px (2.4 : 1). The carousel keeps
+/// that ratio at every screen width, so the height scales with the width.
+const double _bannerAspectRatio = 1200 / 500;
+
+/// Advertising banner carousel with automatic rotation every 2 seconds.
+/// Manual swipe keeps working (PageView's normal gesture handling); the
+/// timer just advances the SAME controller, and onPageChanged keeps the
+/// tracked page in sync so auto-rotation continues from wherever the user
+/// last swiped to, rather than resetting.
+class _HomeBannerCarousel extends StatefulWidget {
+  const _HomeBannerCarousel({required this.banners});
+
+  final List<Banner> banners;
+
+  @override
+  State<_HomeBannerCarousel> createState() => _HomeBannerCarouselState();
+}
+
+class _HomeBannerCarouselState extends State<_HomeBannerCarousel> {
+  final PageController _controller = PageController();
+  Timer? _timer;
+  int _page = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _restartTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeBannerCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The banner list can change (e.g. after a governorate switch) to a
+    // different length or different banners at the same length. Either way,
+    // reset to the first page so we never try to animate to an index that
+    // no longer exists in the new list, then restart the rotation timer to
+    // match the new list.
+    final changed = oldWidget.banners.length != widget.banners.length ||
+        !_sameBannerIds(oldWidget.banners, widget.banners);
+    if (changed) {
+      _page = 0;
+      if (_controller.hasClients && widget.banners.isNotEmpty) {
+        _controller.jumpToPage(0);
+      }
+      _restartTimer();
+    }
+  }
+
+  bool _sameBannerIds(List<Banner> a, List<Banner> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
+  }
+
+  void _restartTimer() {
+    _timer?.cancel();
+    if (widget.banners.length < 2) return;
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted || !_controller.hasClients) return;
+      final next = (_page + 1) % widget.banners.length;
+      _controller.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Returns the trimmed URL when [targetUrl] is a valid external http(s)
+  /// link, or null otherwise (missing, blank, malformed, or any non-http/
+  /// https scheme — e.g. an internal route like `/stores?category=...`).
+  /// Banners are never routed internally; a null result just means the
+  /// banner isn't tappable.
+  String? _validExternalBannerUrl(String? targetUrl) {
+    if (targetUrl == null) return null;
+    final trimmed = targetUrl.trim();
+    if (trimmed.isEmpty) return null;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+    if (uri.host.isEmpty) return null;
+    return trimmed;
+  }
+
+  Future<void> _openBannerUrl(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } on Object {
+      // Opening the link is best-effort only — never crash or surface an
+      // error just because no app could handle it.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AspectRatio(
+        aspectRatio: _bannerAspectRatio,
+        child: PageView.builder(
+          controller: _controller,
+          itemCount: widget.banners.length,
+          onPageChanged: (index) => _page = index,
+          itemBuilder: (context, index) {
+            final banner = widget.banners[index];
+            final externalUrl = _validExternalBannerUrl(banner.targetUrl);
+            return GestureDetector(
+              // A null onTap makes this a no-op tap target without
+              // affecting PageView's own horizontal swipe gesture — swipe
+              // and this tap detector coexist normally in Flutter's gesture
+              // arena, no special handling needed.
+              onTap: externalUrl == null
+                  ? null
+                  : () => _openBannerUrl(externalUrl),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // BoxFit.contain shows the whole ad; the neutral
+                      // background fills any leftover space when the image
+                      // ratio differs from 2.4 : 1.
+                      ColoredBox(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
+                        child: banner.imageUrl.isEmpty
+                            ? const Center(child: Icon(Icons.image_outlined))
+                            : Image.network(
+                        banner.imageUrl,
+                        fit: BoxFit.contain,
+                        // A failed image (404, network hiccup, stale URL) must
+                        // never crash or blank out just this one banner — the
+                        // carousel keeps auto-rotating through the rest
+                        // regardless, since each page's Image error is scoped
+                        // to that page only.
+                        errorBuilder: (context, error, stackTrace) =>
+                            ColoredBox(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          child: const Center(
+                              child: Icon(Icons.image_not_supported_outlined)),
+                        ),
+                      ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
 }
 
 class _BalanceCard extends StatelessWidget {
@@ -1312,7 +1574,8 @@ class _BalanceCard extends StatelessWidget {
                         fontWeight: FontWeight.w900),
                   ),
                 if (points != null && points!.heldPoints > 0)
-                  Text('منها ${formatNumber(points!.heldPoints)} نقطة قيد المعالجة',
+                  Text(
+                      'منها ${formatNumber(points!.heldPoints)} نقطة قيد المعالجة',
                       style:
                           const TextStyle(color: Colors.white70, fontSize: 12)),
               ],
@@ -1329,30 +1592,134 @@ class _StoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Card(
+      clipBehavior: Clip.antiAlias,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ExpansionTile(
-        leading: const CircleAvatar(
-          backgroundColor: YallaColors.primaryStrong,
-          foregroundColor: Colors.white,
-          child: Icon(Icons.storefront_rounded, size: 20),
-        ),
-        title: Text(store.name,
-            style: const TextStyle(fontWeight: FontWeight.w800)),
-        subtitle: Text(store.category),
-        trailing:
-            const Chip(label: Text('حصري', style: TextStyle(fontSize: 10))),
-        childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+        shape: const RoundedRectangleBorder(side: BorderSide.none),
+        collapsedShape: const RoundedRectangleBorder(side: BorderSide.none),
+        tilePadding: const EdgeInsets.fromLTRB(14, 8, 10, 8),
+        childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
         expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        leading: _StoreLogo(url: store.logoUrl),
+        title: Text(
+          store.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(children: [
+            Flexible(
+              child: Text(
+                store.category,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                child: Text(
+                  'حصري',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          ]),
+        ),
         children: [
-          Text(store.description),
-          const SizedBox(height: 8),
+          Text(
+            store.description,
+            style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+          ),
+          const SizedBox(height: 12),
           Row(children: [
-            const Icon(Icons.location_on_outlined, size: 17),
-            const SizedBox(width: 5),
-            Text(store.location)
+            Icon(Icons.location_on_outlined, size: 18, color: scheme.primary),
+            const SizedBox(width: 6),
+            Expanded(child: Text(store.location)),
           ]),
         ],
       ),
+    );
+  }
+}
+
+/// Product image, or a placeholder tile when the product has no image.
+class _ProductImage extends StatelessWidget {
+  const _ProductImage({required this.url});
+
+  final String? url;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final placeholder = Icon(Icons.redeem_rounded, size: 28, color: scheme.primary);
+    final imageUrl = url;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        width: 64,
+        height: 64,
+        child: ColoredBox(
+          color: scheme.primaryContainer,
+          child: imageUrl == null
+              ? Center(child: placeholder)
+              : Image.network(
+                  imageUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Center(child: placeholder),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Store logo tile. Falls back to the default storefront icon when the store
+/// has no logo or the logo fails to load.
+class _StoreLogo extends StatelessWidget {
+  const _StoreLogo({required this.url});
+
+  final String? url;
+
+  @override
+  Widget build(BuildContext context) {
+    final logoUrl = url;
+    return Container(
+      width: 56,
+      height: 56,
+      clipBehavior: Clip.antiAlias,
+      padding: EdgeInsets.all(logoUrl == null ? 0 : 6),
+      decoration: BoxDecoration(
+        color: logoUrl == null ? YallaColors.primaryStrong : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: logoUrl == null
+          ? const Icon(Icons.storefront_rounded, size: 26, color: Colors.white)
+          : Image.network(
+              logoUrl,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.storefront_rounded,
+                size: 26,
+                color: YallaColors.primaryStrong,
+              ),
+            ),
     );
   }
 }
@@ -1376,10 +1743,22 @@ class CustomerQrPage extends StatefulWidget {
 class _CustomerQrPageState extends State<CustomerQrPage> {
   bool requesting = false;
 
+  /// Periodically re-checks the current token while this page stays mounted
+  /// (e.g. the user leaves it open past the 120s TTL) so an idle screen
+  /// self-heals instead of continuing to display an expired QR. This does
+  /// NOT force a new token every tick — it just re-runs the same
+  /// [_ensureQrToken] check, which only issues a new token when the current
+  /// one is missing or within its existing 10-second safety margin.
+  Timer? _refreshTimer;
+
   @override
   void initState() {
     super.initState();
     _ensureQrToken();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _ensureQrToken(),
+    );
   }
 
   @override
@@ -1389,6 +1768,12 @@ class _CustomerQrPageState extends State<CustomerQrPage> {
         oldWidget.state.qrToken != widget.state.qrToken) {
       _ensureQrToken();
     }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   void _ensureQrToken() {
@@ -1476,11 +1861,21 @@ class _CustomerQrPageState extends State<CustomerQrPage> {
 }
 
 class CustomerWalletPage extends StatelessWidget {
-  const CustomerWalletPage(
-      {required this.transactions, required this.customer, super.key});
+  const CustomerWalletPage({
+    required this.transactions,
+    required this.customer,
+    this.productRedemptions = const [],
+    super.key,
+  });
 
   final List<LoyaltyTransaction> transactions;
   final Customer customer;
+
+  /// Persistent history of the customer's own digital-product redemption
+  /// requests. Every request — PENDING, FULFILLED, or REJECTED — stays
+  /// visible here permanently; a FULFILLED entry is only visually dimmed,
+  /// never removed.
+  final List<ProductRedemption> productRedemptions;
 
   @override
   Widget build(BuildContext context) {
@@ -1511,8 +1906,93 @@ class CustomerWalletPage extends StatelessWidget {
                   ),
                 ),
               )),
+        const SizedBox(height: 22),
+        const _SectionTitle('طلبات استبدال المنتجات'),
+        const SizedBox(height: 10),
+        if (productRedemptions.isEmpty)
+          const _EmptyState(
+              icon: Icons.redeem_outlined, text: 'لا توجد طلبات استبدال بعد')
+        else
+          ...productRedemptions.map((redemption) {
+            final card = Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              child: ListTile(
+                leading: CircleAvatar(
+                    child:
+                        Icon(_productRedemptionStatusIcon(redemption.status))),
+                title: Text(redemption.productName ?? 'منتج رقمي',
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: Text(
+                  [
+                    formatDate(redemption.createdAt),
+                    if (redemption.phoneNumber != null &&
+                        redemption.phoneNumber!.isNotEmpty)
+                      redemption.phoneNumber!,
+                  ].join(' · '),
+                ),
+                trailing: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('${formatNumber(redemption.pointsCostSnapshot)} نقطة',
+                        style: const TextStyle(fontWeight: FontWeight.w900)),
+                    Text(
+                      _productRedemptionStatusLabel(redemption.status),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _productRedemptionStatusColor(
+                            context, redemption.status),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+            // Only the completed (FULFILLED) history entry is dimmed — the
+            // request is kept permanently, never removed, just visually
+            // muted. PENDING/REJECTED entries render at full opacity.
+            return redemption.status == RedemptionStatus.fulfilled
+                ? Opacity(opacity: 0.55, child: card)
+                : card;
+          }),
       ],
     );
+  }
+}
+
+IconData _productRedemptionStatusIcon(RedemptionStatus status) {
+  switch (status) {
+    case RedemptionStatus.fulfilled:
+      return Icons.check_circle_outline_rounded;
+    case RedemptionStatus.rejected:
+      return Icons.cancel_outlined;
+    case RedemptionStatus.pending:
+      return Icons.hourglass_top_rounded;
+  }
+}
+
+String _productRedemptionStatusLabel(RedemptionStatus status) {
+  switch (status) {
+    case RedemptionStatus.pending:
+      return 'طلبك قيد المراجعة';
+    case RedemptionStatus.fulfilled:
+      return 'تم الاستبدال';
+    case RedemptionStatus.rejected:
+      return 'تم رفض الطلب';
+  }
+}
+
+Color _productRedemptionStatusColor(
+    BuildContext context, RedemptionStatus status) {
+  final scheme = Theme.of(context).colorScheme;
+  switch (status) {
+    case RedemptionStatus.fulfilled:
+      return scheme.primary;
+    case RedemptionStatus.rejected:
+      return scheme.error;
+    case RedemptionStatus.pending:
+      return scheme.onSurfaceVariant;
   }
 }
 
@@ -1580,7 +2060,8 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
                       prefixIcon: Icon(Icons.savings_outlined)),
                 ),
                 const SizedBox(height: 10),
-                Text('القيمة: ${formatNumber(requested * pointValue)} ل.س'),
+                Text(
+                    'القيمة: ${formatNumber((requested * pointValue).round())} ل.س'),
                 const SizedBox(height: 14),
                 FilledButton(
                   onPressed: requested > 0 && requested <= available
@@ -1599,22 +2080,59 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
           const _EmptyState(
               icon: Icons.redeem_outlined, text: 'لا توجد منتجات متاحة حالياً')
         else
-          ...widget.state.products.map((product) => Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  leading:
-                      CircleAvatar(child: Icon(_productIcon(product.iconSeed))),
-                  title: Text(product.name,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  subtitle: Text('${formatNumber(product.costInPoints)} نقطة'),
-                  trailing: OutlinedButton(
-                    onPressed: available >= product.costInPoints
-                        ? () => _redeemProduct(customer, product)
-                        : null,
-                    child: const Text('استبدال'),
+          ...widget.state.products.map((product) {
+            // Only an ACTIVE PENDING request for this exact product blocks
+            // a new one — a past FULFILLED/REJECTED request never does, so
+            // the same digital product can be redeemed again over time.
+            final hasPendingRequest = widget.state.productRedemptions.any(
+              (redemption) =>
+                  redemption.productId == product.id &&
+                  redemption.status == RedemptionStatus.pending,
+            );
+            return Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(children: [
+                  _ProductImage(url: product.imageUrl),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(product.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${formatNumber(product.costInPoints)} نقطة',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              )),
+                  const SizedBox(width: 8),
+                  hasPendingRequest
+                      ? const OutlinedButton(
+                          onPressed: null,
+                          child: Text('قيد المراجعة'),
+                        )
+                      : OutlinedButton(
+                          onPressed: available >= product.costInPoints
+                              ? () => _redeemProduct(customer, product)
+                              : null,
+                          child: const Text('استبدال'),
+                        ),
+                ]),
+              ),
+            );
+          }),
       ],
     );
   }
@@ -1661,17 +2179,10 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
         SnackBar(content: Text('تم طلب «${product.name}» بنجاح.')));
   }
 
-  IconData _productIcon(int seed) => [
-        Icons.phone_android_rounded,
-        Icons.shopping_bag_outlined,
-        Icons.music_note_rounded,
-        Icons.wifi_rounded
-      ][seed % 4];
-
-  int _pointValueSyp(List<CashRedemptionRequest> requests) {
+  double _pointValueSyp(List<CashRedemptionRequest> requests) {
     for (final request in requests) {
       if (request.pointsRequested > 0) {
-        return request.cashValueSyp ~/ request.pointsRequested;
+        return request.cashValueSyp / request.pointsRequested;
       }
     }
     return 5;
@@ -1748,9 +2259,15 @@ class _EmptyState extends StatelessWidget {
       );
 }
 
+/// [value] is a UTC instant (parsed from the backend's ISO-8601 `Z`
+/// timestamp). Converting to local time here — only at the point of display —
+/// ensures the shown expiry time matches the phone's own clock/timezone,
+/// including under daylight saving, without affecting the underlying UTC
+/// instant used everywhere else (expiry comparisons, JWT validation).
 String _formatTime(DateTime value) {
-  final hour = value.hour.toString().padLeft(2, '0');
-  final minute = value.minute.toString().padLeft(2, '0');
+  final local = value.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
   return '$hour:$minute';
 }
 

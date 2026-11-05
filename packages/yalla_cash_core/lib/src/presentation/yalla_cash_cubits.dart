@@ -34,6 +34,7 @@ class CustomerAppState extends Equatable {
     this.transactions = const [],
     this.products = const [],
     this.cashRequests = const [],
+    this.productRedemptions = const [],
     this.banners = const [],
     this.failure,
   });
@@ -47,6 +48,11 @@ class CustomerAppState extends Equatable {
   final List<LoyaltyTransaction> transactions;
   final List<DigitalProduct> products;
   final List<CashRedemptionRequest> cashRequests;
+
+  /// The customer's own digital-product redemption requests (PENDING,
+  /// FULFILLED, REJECTED), newest first — persistent history, loaded as
+  /// secondary/background startup data alongside the other lists below.
+  final List<ProductRedemption> productRedemptions;
 
   /// Home-page banners. Owned by the Cubit (not local widget state) so that
   /// every refresh() reflects the latest admin-managed banners.
@@ -65,6 +71,7 @@ class CustomerAppState extends Equatable {
     List<LoyaltyTransaction>? transactions,
     List<DigitalProduct>? products,
     List<CashRedemptionRequest>? cashRequests,
+    List<ProductRedemption>? productRedemptions,
     List<Banner>? banners,
     Object? failure = _unset,
   }) =>
@@ -83,6 +90,7 @@ class CustomerAppState extends Equatable {
         transactions: transactions ?? this.transactions,
         products: products ?? this.products,
         cashRequests: cashRequests ?? this.cashRequests,
+        productRedemptions: productRedemptions ?? this.productRedemptions,
         banners: banners ?? this.banners,
         failure: identical(failure, _unset)
             ? this.failure
@@ -100,6 +108,7 @@ class CustomerAppState extends Equatable {
         transactions,
         products,
         cashRequests,
+        productRedemptions,
         banners,
         failure,
       ];
@@ -108,8 +117,37 @@ class CustomerAppState extends Equatable {
 class CustomerAppCubit extends Cubit<CustomerAppState> {
   CustomerAppCubit(this._repository) : super(const CustomerAppState());
 
+  /// Returns null when the claim could not be completed, so the UI never
+  /// reports a reward the server did not grant.
+  Future<ShareRewardResult?> claimShareReward() async {
+    try {
+      final result = await _repository.claimShareReward();
+      await refresh();
+      return result;
+    } on Object {
+      return null;
+    }
+  }
+
   final YallaCashRepository _repository;
 
+  /// In-flight guard for [updateGovernorate]: prevents overlapping
+  /// governorate-change operations (e.g. a rapid double-tap on two
+  /// governorates) from racing each other and leaving stale/mixed
+  /// stores or banners in state. Always released via try/finally.
+  bool _changingGovernorate = false;
+
+  /// Restores the session using ONLY the minimum request needed to confirm
+  /// the saved token is still valid and load the customer's identity
+  /// (`getCustomerProfile`). This is what unblocks the startup spinner.
+  ///
+  /// The remaining startup data (points, stores, transactions, products,
+  /// cash requests, banners) is then loaded in the background via
+  /// [_loadSecondaryStartupData] — a startup-only loader that deliberately
+  /// excludes getCustomerProfile() (already fetched above) so startup never
+  /// performs a redundant second profile request — so a slow/failing
+  /// non-critical request can never delay or block the app from becoming
+  /// interactive.
   Future<void> restoreSession() async {
     final localLookupStopwatch = Stopwatch()..start();
     try {
@@ -224,7 +262,8 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
           transactions: results[3] as List<LoyaltyTransaction>,
           products: results[4] as List<DigitalProduct>,
           cashRequests: results[5] as List<CashRedemptionRequest>,
-          banners: results[6] as List<Banner>,
+          productRedemptions: results[6] as List<ProductRedemption>,
+          banners: results[7] as List<Banner>,
           failure: null,
         ),
       );
@@ -234,6 +273,7 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
   /// Best-effort: a failed device-token registration must never disrupt the
   /// rest of the app, so failures are swallowed rather than surfaced.
   Future<void> registerDeviceToken(String token) async {
+    _deviceToken = token;
     try {
       await _repository.registerDeviceToken(token);
     } on Object {
@@ -241,13 +281,27 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     }
   }
 
+  /// The push token registered for the signed-in account on this device.
+  String? _deviceToken;
+
+  /// Only one governorate change can run at a time — a second call while one
+  /// is already in flight is ignored (not queued), so a rapid double-tap
+  /// can never race two overlapping updateGovernorate()+refresh() cycles
+  /// against each other. The guard is always released, including on
+  /// failure, since it's cleared in `finally`.
   Future<void> updateGovernorate(String governorateId) async {
-    await _run(() async {
-      final customer =
-          await _repository.updateCustomerGovernorate(governorateId);
-      emit(state.copyWith(customer: customer, qrToken: null));
-      await refresh();
-    });
+    if (_changingGovernorate) return;
+    _changingGovernorate = true;
+    try {
+      await _run(() async {
+        final customer =
+            await _repository.updateCustomerGovernorate(governorateId);
+        emit(state.copyWith(customer: customer, qrToken: null));
+        await refresh();
+      });
+    } finally {
+      _changingGovernorate = false;
+    }
   }
 
   Future<void> issueQrToken() async {
@@ -273,31 +327,61 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     });
   }
 
+  /// Removes this device's push token from the account before the session is
+  /// cleared. Logout never waits on the network for long and never fails
+  /// because of it: if the call fails or times out, the backend still drops
+  /// tokens that FCM rejects, and the app deletes its local token on sign-out.
   Future<void> logout() async {
+    final token = _deviceToken;
+    _deviceToken = null;
+    if (token != null) {
+      try {
+        await _repository
+            .unregisterDeviceToken(token)
+            .timeout(const Duration(seconds: 5));
+      } on Object {
+        // Offline or slow network: logout continues without the removal.
+      }
+    }
     await _repository.logout();
     emit(const CustomerAppState());
   }
 
   /// Loads every piece of customer data in parallel. Banners are included so
   /// a single refresh() always reflects the latest server state.
+  ///
+  /// Stores are scoped to the customer's currently selected governorate
+  /// (mirrors how listActiveBanners() is already scoped server-side), so a
+  /// governorate switch always shows only that governorate's stores — never
+  /// a stale/other governorate's as a fallback.
   Future<List<Object>> _loadCustomerData() => Future.wait<Object>([
         _repository.getCustomerProfile(),
         _repository.getCustomerPoints(),
-        _repository.listActiveStores(),
+        _repository.listActiveStores(
+            governorateId: state.customer?.governorateId),
         _repository.listCustomerTransactions(),
         _repository.listDigitalProducts(),
         _repository.listCustomerCashRequests(),
+        _repository.listCustomerProductRedemptions(),
         _repository.listActiveBanners(placement: 'HOME'),
       ]);
 
+  /// Startup-only background loader used by [restoreSession] after it has
+  /// already fetched the profile. Loads everything [_loadCustomerData]
+  /// would, EXCEPT getCustomerProfile() — avoiding the redundant second
+  /// profile request a plain [refresh] would otherwise perform on startup.
+  /// A failure here is non-fatal: it updates [CustomerAppState.failure] but
+  /// never resets the already-restored session/customer.
   Future<void> _loadSecondaryStartupData() async {
     try {
       final results = await Future.wait<Object>([
         _repository.getCustomerPoints(),
-        _repository.listActiveStores(),
+        _repository.listActiveStores(
+            governorateId: state.customer?.governorateId),
         _repository.listCustomerTransactions(),
         _repository.listDigitalProducts(),
         _repository.listCustomerCashRequests(),
+        _repository.listCustomerProductRedemptions(),
         _repository.listActiveBanners(placement: 'HOME'),
       ]);
       emit(state.copyWith(
@@ -307,7 +391,8 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
         transactions: results[2] as List<LoyaltyTransaction>,
         products: results[3] as List<DigitalProduct>,
         cashRequests: results[4] as List<CashRedemptionRequest>,
-        banners: results[5] as List<Banner>,
+        productRedemptions: results[5] as List<ProductRedemption>,
+        banners: results[6] as List<Banner>,
         failure: null,
       ));
     } on YallaCashFailure catch (failure) {
@@ -549,6 +634,8 @@ class AdminAppState extends Equatable {
     this.settlements = const [],
     this.recentTransactions = const [],
     this.pointValueSyp,
+    this.minCashWithdrawalSyp,
+    this.shareRewardPoints,
     this.failure,
   });
 
@@ -566,7 +653,13 @@ class AdminAppState extends Equatable {
   /// Latest loyalty transactions shown in the overview "recent activity"
   /// table. Previously this table rendered a hardcoded empty list.
   final List<LoyaltyTransaction> recentTransactions;
-  final int? pointValueSyp;
+  final double? pointValueSyp;
+
+  /// Configured minimum cash payout in SYP. Stored only; not enforced yet.
+  final int? minCashWithdrawalSyp;
+
+  /// Points granted once per customer for sharing the app. 0 disables it.
+  final int? shareRewardPoints;
   final YallaCashFailure? failure;
 
   bool get isAuthenticated => session?.role == YallaUserRole.admin;
@@ -584,6 +677,8 @@ class AdminAppState extends Equatable {
     List<MerchantSettlementSummary>? settlements,
     List<LoyaltyTransaction>? recentTransactions,
     Object? pointValueSyp = _unset,
+    Object? minCashWithdrawalSyp = _unset,
+    Object? shareRewardPoints = _unset,
     Object? failure = _unset,
   }) =>
       AdminAppState(
@@ -603,7 +698,13 @@ class AdminAppState extends Equatable {
         recentTransactions: recentTransactions ?? this.recentTransactions,
         pointValueSyp: identical(pointValueSyp, _unset)
             ? this.pointValueSyp
-            : pointValueSyp as int?,
+            : pointValueSyp as double?,
+        minCashWithdrawalSyp: identical(minCashWithdrawalSyp, _unset)
+            ? this.minCashWithdrawalSyp
+            : minCashWithdrawalSyp as int?,
+        shareRewardPoints: identical(shareRewardPoints, _unset)
+            ? this.shareRewardPoints
+            : shareRewardPoints as int?,
         failure: identical(failure, _unset)
             ? this.failure
             : failure as YallaCashFailure?,
@@ -623,6 +724,8 @@ class AdminAppState extends Equatable {
         settlements,
         recentTransactions,
         pointValueSyp,
+        minCashWithdrawalSyp,
+        shareRewardPoints,
         failure,
       ];
 }
@@ -669,6 +772,8 @@ class AdminAppCubit extends Cubit<AdminAppState> {
         _repository.listSettlements(),
         _repository.getPointValue(),
         _repository.listAdminRecentTransactions(limit: 8),
+        _repository.getMinCashWithdrawal(),
+        _repository.getShareRewardPoints(),
       ]);
 
       // A newer refresh has started while this one was in flight: discard
@@ -686,8 +791,10 @@ class AdminAppCubit extends Cubit<AdminAppState> {
           productRedemptions: results[5] as List<ProductRedemption>,
           merchantAccounts: results[6] as List<MerchantAccount>,
           settlements: results[7] as List<MerchantSettlementSummary>,
-          pointValueSyp: results[8] as int,
+          pointValueSyp: results[8] as double,
           recentTransactions: results[9] as List<LoyaltyTransaction>,
+          minCashWithdrawalSyp: results[10] as int,
+          shareRewardPoints: results[11] as int,
           failure: null,
         ),
       );
@@ -753,21 +860,54 @@ class AdminAppCubit extends Cubit<AdminAppState> {
         await refresh();
       });
 
-  Future<bool> sendGeneralNotification({
+  /// Returns the recorded broadcast, or null when the request failed. The same
+  /// [idempotencyKey] may be retried safely: the server returns the original.
+  Future<NotificationBroadcast?> sendGeneralNotification({
     required String title,
     required String body,
-  }) =>
-      _run(() async {
-        await _repository.sendGeneralNotification(title: title, body: body);
-      });
+    required String idempotencyKey,
+  }) async {
+    try {
+      return await _repository.sendGeneralNotification(
+        title: title,
+        body: body,
+        idempotencyKey: idempotencyKey,
+      );
+    } on Object {
+      return null;
+    }
+  }
 
-  Future<bool> createStore(PartnerStore store) => _run(() async {
-        await _repository.createStore(store);
+  /// Newest broadcasts first; a failed load shows an empty history.
+  Future<List<NotificationBroadcast>> listNotificationBroadcasts() async {
+    try {
+      return await _repository.listNotificationBroadcasts();
+    } on Object {
+      return const [];
+    }
+  }
+
+  /// The new store's id is assigned by the server, so the logo is uploaded
+  /// only after the store has been created.
+  Future<bool> createStore(PartnerStore store, {StoreLogoUpload? logo}) =>
+      _run(() async {
+        final saved = await _repository.createStore(store);
+        if (logo != null) await _repository.setStoreLogo(saved.id, logo);
         await refresh();
       });
 
-  Future<bool> updateStore(PartnerStore store) => _run(() async {
+  Future<bool> updateStore(
+    PartnerStore store, {
+    StoreLogoUpload? logo,
+    bool removeLogo = false,
+  }) =>
+      _run(() async {
         await _repository.updateStore(store);
+        if (logo != null) {
+          await _repository.setStoreLogo(store.id, logo);
+        } else if (removeLogo) {
+          await _repository.removeStoreLogo(store.id);
+        }
         await refresh();
       });
 
@@ -776,13 +916,28 @@ class AdminAppCubit extends Cubit<AdminAppState> {
         await refresh();
       });
 
-  Future<bool> createProduct(DigitalProduct product) => _run(() async {
-        await _repository.createProduct(product);
+  /// The server assigns new product ids, so an image is uploaded only after
+  /// the product has been created.
+  Future<bool> createProduct(DigitalProduct product,
+          {StoreLogoUpload? image}) =>
+      _run(() async {
+        final saved = await _repository.createProduct(product);
+        if (image != null) await _repository.setProductImage(saved.id, image);
         await refresh();
       });
 
-  Future<bool> updateProduct(DigitalProduct product) => _run(() async {
+  Future<bool> updateProduct(
+    DigitalProduct product, {
+    StoreLogoUpload? image,
+    bool removeImage = false,
+  }) =>
+      _run(() async {
         await _repository.updateProduct(product);
+        if (image != null) {
+          await _repository.setProductImage(product.id, image);
+        } else if (removeImage) {
+          await _repository.removeProductImage(product.id);
+        }
         await refresh();
       });
 
@@ -814,6 +969,36 @@ class AdminAppCubit extends Cubit<AdminAppState> {
     }
   }
 
+  /// Null when the preview cannot be loaded; nothing is changed by previewing.
+  Future<MonthlySettlementPreview?> previewMonthlySettlement(
+      String month) async {
+    try {
+      return await _repository.previewMonthlySettlement(month);
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Null when the run request fails. Successful merchants stay settled even
+  /// when others fail, and the result lists each merchant's outcome.
+  Future<MonthlySettlementRunResult?> runMonthlySettlement(String month) async {
+    try {
+      final result = await _repository.runMonthlySettlement(month);
+      await refresh();
+      return result;
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory() async {
+    try {
+      return await _repository.listMonthlySettlementHistory();
+    } on Object {
+      return const [];
+    }
+  }
+
   Future<bool> settleStore(MerchantSettlementSummary settlement) =>
       _run(() async {
         await _repository.settleStore(
@@ -824,9 +1009,22 @@ class AdminAppCubit extends Cubit<AdminAppState> {
         await refresh();
       });
 
-  Future<bool> updatePointValue(int pointValueSyp) => _run(() async {
+  Future<bool> updatePointValue(double pointValueSyp) => _run(() async {
         final value = await _repository.updatePointValue(pointValueSyp);
         emit(state.copyWith(pointValueSyp: value));
+        await refresh();
+      });
+
+  Future<bool> updateShareRewardPoints(int points) => _run(() async {
+        final value = await _repository.updateShareRewardPoints(points);
+        emit(state.copyWith(shareRewardPoints: value));
+        await refresh();
+      });
+
+  Future<bool> updateMinCashWithdrawal(int amountSyp) => _run(() async {
+        final value =
+            await _repository.updateMinCashWithdrawal(amountSyp);
+        emit(state.copyWith(minCashWithdrawalSyp: value));
         await refresh();
       });
 

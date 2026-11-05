@@ -144,9 +144,9 @@ class IssuedMerchantAccount {
 }
 
 abstract class YallaCashRepository {
-  Future<PhoneOtpChallenge> startCustomerPhoneOtp(String phone);
   Future<bool> hasSavedSession();
 
+  Future<PhoneOtpChallenge> startCustomerPhoneOtp(String phone);
 
   Future<AuthSession> verifyCustomerPhoneOtp({
     required String challengeId,
@@ -176,6 +176,7 @@ abstract class YallaCashRepository {
   Future<void> logout();
 
   Future<void> registerDeviceToken(String token);
+  Future<void> unregisterDeviceToken(String token);
 
   Future<Customer> getCustomerProfile();
   Future<Customer> updateCustomerProfile({
@@ -189,7 +190,8 @@ abstract class YallaCashRepository {
       {String? placement, String? governorateId});
   Future<PointsSummary> getCustomerPoints();
   Future<CustomerQrToken> issueCustomerQrToken();
-  Future<List<PartnerStore>> listActiveStores({String? city, String? category});
+  Future<List<PartnerStore>> listActiveStores(
+      {String? city, String? category, String? governorateId});
   Future<List<LoyaltyTransaction>> listCustomerTransactions({String? cursor});
   Future<List<DigitalProduct>> listDigitalProducts();
   Future<List<CashRedemptionRequest>> listCustomerCashRequests();
@@ -198,6 +200,7 @@ abstract class YallaCashRepository {
     required DigitalProduct product,
     String? phoneNumber,
   });
+  Future<List<ProductRedemption>> listCustomerProductRedemptions();
 
   Future<MerchantWorkspaceSnapshot> getMerchantWorkspace();
   Future<void> registerMerchantDevice({
@@ -234,6 +237,8 @@ abstract class YallaCashRepository {
   Future<List<Banner>> listAdminBanners({String? placement});
   Future<Banner> createBanner(Banner banner);
   Future<Banner> updateBanner(Banner banner);
+  Future<Banner> setBannerImage(String bannerId, StoreLogoUpload image);
+  Future<Banner> removeBannerImage(String bannerId);
   Future<void> deleteBanner(String bannerId);
   Future<Governorate> createGovernorate(Governorate governorate);
   Future<Governorate> updateGovernorate(Governorate governorate);
@@ -248,10 +253,12 @@ abstract class YallaCashRepository {
     required String redemptionId,
     required bool approve,
   });
-  Future<void> sendGeneralNotification({
+  Future<NotificationBroadcast> sendGeneralNotification({
     required String title,
     required String body,
+    required String idempotencyKey,
   });
+  Future<List<NotificationBroadcast>> listNotificationBroadcasts();
   Future<List<PartnerStore>> listAdminStores();
   Future<PartnerStore> createStore(PartnerStore store);
   Future<PartnerStore> updateStore(PartnerStore store);
@@ -259,9 +266,13 @@ abstract class YallaCashRepository {
   /// disappears from Customer listings, without touching any historical
   /// transaction/settlement data.
   Future<void> deleteStore(String storeId);
+  Future<PartnerStore> setStoreLogo(String storeId, StoreLogoUpload logo);
+  Future<PartnerStore> removeStoreLogo(String storeId);
   Future<List<DigitalProduct>> listAdminProducts();
   Future<DigitalProduct> createProduct(DigitalProduct product);
   Future<DigitalProduct> updateProduct(DigitalProduct product);
+  Future<DigitalProduct> setProductImage(String productId, StoreLogoUpload image);
+  Future<DigitalProduct> removeProductImage(String productId);
   Future<List<MerchantAccount>> listMerchantAccounts();
   Future<IssuedMerchantAccount> createMerchantAccount({
     required String storeId,
@@ -269,8 +280,13 @@ abstract class YallaCashRepository {
     String? password,
     String? displayLabel,
   });
-  Future<int> getPointValue();
-  Future<int> updatePointValue(int pointValueSyp);
+  Future<double> getPointValue();
+  Future<double> updatePointValue(double pointValueSyp);
+  Future<int> getMinCashWithdrawal();
+  Future<int> updateMinCashWithdrawal(int amountSyp);
+  Future<ShareRewardResult> claimShareReward();
+  Future<int> getShareRewardPoints();
+  Future<int> updateShareRewardPoints(int points);
   Future<List<MerchantSettlementSummary>> listSettlements({
     DateTime? periodStart,
     DateTime? periodEnd,
@@ -280,4 +296,7 @@ abstract class YallaCashRepository {
     required DateTime periodStart,
     required DateTime periodEnd,
   });
+  Future<MonthlySettlementPreview> previewMonthlySettlement(String month);
+  Future<MonthlySettlementRunResult> runMonthlySettlement(String month);
+  Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory();
 }
