@@ -9,6 +9,11 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:yalla_cash_customer/src/push_notifications.dart';
+import 'package:yalla_cash_customer/src/ui/customer_theme.dart';
+import 'package:yalla_cash_customer/src/ui/logo_trim.dart';
+import 'package:yalla_cash_customer/src/ui/components.dart';
+import 'package:yalla_cash_customer/src/ui/shell.dart';
+import 'package:yalla_cash_customer/src/ui/tokens.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart';
 
@@ -128,8 +133,8 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
           debugShowCheckedModeBanner: false,
           title: 'يلا كاش',
           scaffoldMessengerKey: _messengerKey,
-          theme: buildYallaTheme(Brightness.light),
-          darkTheme: buildYallaTheme(Brightness.dark),
+          theme: buildCustomerTheme(Brightness.light),
+          darkTheme: buildCustomerTheme(Brightness.dark),
           themeMode: themeMode,
           builder: (context, child) => Directionality(
             textDirection: TextDirection.rtl,
@@ -1012,92 +1017,46 @@ class _CustomerShellState extends State<CustomerShell> {
           cubit: widget.cubit, state: widget.state, customer: customer),
       CustomerQrPage(
           cubit: widget.cubit, state: widget.state, customer: customer),
-      CustomerWalletPage(
+      // Wallet and store fade in on their first visit only (never on return).
+      YcRevealOnFirstShow(
+        active: selectedIndex == 2,
+        child: CustomerWalletPage(
           transactions: widget.state.transactions,
           customer: customer,
-          productRedemptions: widget.state.productRedemptions),
-      CustomerRewardsPage(cubit: widget.cubit, state: widget.state),
+          productRedemptions: widget.state.productRedemptions,
+          cashRequests: widget.state.cashRequests,
+          // Wallet data arrives in one batch with the points summary.
+          loading: widget.state.points == null &&
+              widget.state.status != LoadStatus.failure,
+          failed: widget.state.points == null &&
+              widget.state.status == LoadStatus.failure,
+          onRetry: widget.cubit.refresh,
+        ),
+      ),
+      YcRevealOnFirstShow(
+        active: selectedIndex == 3,
+        child: CustomerRewardsPage(cubit: widget.cubit, state: widget.state),
+      ),
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const YallaCashLogo(height: 34, markOnly: true),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('يلا كاش',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w900)),
-                Text(
-                  'مرحباً ${customer.name.split(' ').first}',
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-              ],
-            ),
-          ],
-        ),
+      appBar: CustomerAppBar(
+        firstName: customer.name.split(' ').first,
+        // The greeting row belongs to the Home tab only.
+        showGreeting: selectedIndex == 0,
       ),
-      drawer: Drawer(
-        child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              const ListTile(
-                leading:
-                    CircleAvatar(child: Icon(Icons.person_outline_rounded)),
-                title: Text('إعدادات الحساب',
-                    style: TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text('اللغة، المظهر والتواصل'),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.location_on_outlined),
-                title: const Text('تغيير المحافظة'),
-                subtitle: Text(customer.governorate),
-                onTap: _changeGovernorate,
-              ),
-              SwitchListTile(
-                value: widget.darkMode,
-                onChanged: widget.onDarkModeChanged,
-                secondary: const Icon(Icons.dark_mode_outlined),
-                title: const Text('الوضع الداكن'),
-              ),
-              const ListTile(
-                  leading: Icon(Icons.language_rounded),
-                  title: Text('اللغة'),
-                  trailing: Text('العربية')),
-              ListTile(
-                  leading: const Icon(Icons.message_outlined),
-                  title: const Text('تواصل معنا'),
-                  onTap: _contactUsOnWhatsApp),
-              ListTile(
-                  leading: const Icon(Icons.star_outline_rounded),
-                  title: const Text('قيّم التطبيق'),
-                  onTap: _rateAppOnGooglePlay),
-              ListTile(
-                  leading: const Icon(Icons.card_giftcard_rounded),
-                  title: const Text('ادعُ أصدقاءك واربح نقاط'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showShareSheet(context);
-                  }),
-              const Divider(),
-              ListTile(
-                leading: Icon(Icons.logout_rounded,
-                    color: Theme.of(context).colorScheme.error),
-                title: Text('تسجيل الخروج',
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error)),
-                onTap: widget.cubit.logout,
-              ),
-            ],
-          ),
-        ),
+      drawer: CustomerDrawer(
+        governorateName: customer.governorate,
+        darkMode: widget.darkMode,
+        onDarkModeChanged: widget.onDarkModeChanged,
+        onChangeGovernorate: _changeGovernorate,
+        onContact: _contactUsOnWhatsApp,
+        onRate: _rateAppOnGooglePlay,
+        onInvite: () {
+          Navigator.pop(context);
+          _showShareSheet(context);
+        },
+        onLogout: widget.cubit.logout,
       ),
       body: SafeArea(
         // Pull-to-refresh re-syncs every section (profile, points, stores,
@@ -1107,28 +1066,15 @@ class _CustomerShellState extends State<CustomerShell> {
           child: IndexedStack(index: selectedIndex, children: pages),
         ),
       ),
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: CustomerNavBar(
         selectedIndex: selectedIndex,
-        onDestinationSelected: (index) {
+        onSelected: (index) {
           final changed = index != selectedIndex;
           setState(() => selectedIndex = index);
           // Re-sync authoritative data when switching sections so Home /
           // Wallet / Rewards never remain stale after admin-side changes.
           if (changed) unawaited(widget.cubit.refresh());
         },
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home_rounded),
-              label: 'الرئيسية'),
-          NavigationDestination(
-              icon: Icon(Icons.qr_code_2_rounded), label: 'كودي'),
-          NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet_outlined),
-              label: 'المحفظة'),
-          NavigationDestination(
-              icon: Icon(Icons.redeem_outlined), label: 'المتجر'),
-        ],
       ),
     );
   }
@@ -1191,8 +1137,7 @@ class _CustomerShellState extends State<CustomerShell> {
 }
 
 /// Invitation text and official Play Store link (same app id as "rate us").
-const _shareAppMessage =
-    'حمّل تطبيق يلا كاش واستبدل نقاطك بكاش! '
+const _shareAppMessage = 'حمّل تطبيق يلا كاش واستبدل نقاطك بكاش! '
     'https://play.google.com/store/apps/details?id=com.yallacash.app';
 
 /// Share sheet opened from the drawer. It shares the app and asks the server
@@ -1288,7 +1233,8 @@ class _ShareAppSheetState extends State<_ShareAppSheet> {
                     )
                   : const Icon(Icons.share_rounded),
               label: Text(_sharing ? 'جارٍ المشاركة...' : 'شارك الآن'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52)),
             ),
           ],
         ),
@@ -1319,27 +1265,41 @@ class CustomerHomePage extends StatelessWidget {
     final stores =
         state.stores.where((store) => store.isActive).toList(growable: false);
     final banners = state.banners;
-    return ListView(
-      key: const PageStorageKey('customer-home'),
-      padding: const EdgeInsets.fromLTRB(18, 10, 18, 24),
-      children: [
-        _BalanceCard(points: points),
-        const SizedBox(height: 18),
-        if (banners.isNotEmpty)
-          _HomeBannerCarousel(banners: banners),
-        const SizedBox(height: 22),
-        const _SectionTitle('المحلات الحصرية بمدينتك'),
-        const SizedBox(height: 10),
-        if (stores.isEmpty)
-          const _EmptyState(
+    // One gentle entrance for the page, played when Home is first built. It
+    // wraps the list itself (not its lazily built children) and the page stays
+    // mounted across tab switches and rebuilds, so it does not replay on tab
+    // return, refresh, or scrolling. Skipped under reduced motion.
+    return YcFadeSlideIn(
+      offset: 10,
+      child: ListView(
+        key: const PageStorageKey('customer-home'),
+        padding: const EdgeInsets.fromLTRB(
+          YcSpace.gutter,
+          YcSpace.sm,
+          YcSpace.gutter,
+          YcSpace.xl,
+        ),
+        children: [
+          _BalanceCard(points: points),
+          if (banners.isNotEmpty) ...[
+            const SizedBox(height: YcSpace.md),
+            _HomeBannerCarousel(banners: banners),
+          ],
+          const SizedBox(height: YcSpace.xl),
+          const YcSectionHeader('المحلات الحصرية بمدينتك'),
+          const SizedBox(height: YcSpace.sm),
+          if (stores.isEmpty)
+            const YcEmptyState(
               icon: Icons.storefront_outlined,
-              text: 'لا توجد محلات متاحة حالياً')
-        else
-          ...stores.map((partner) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _StoreCard(store: partner),
-              )),
-      ],
+              title: 'لا توجد محلات متاحة حالياً',
+            )
+          else
+            ...stores.map((partner) => Padding(
+                  padding: const EdgeInsets.only(bottom: YcSpace.sm),
+                  child: _StoreCard(store: partner, cubit: cubit),
+                )),
+        ],
+      ),
     );
   }
 }
@@ -1406,6 +1366,11 @@ class _HomeBannerCarouselState extends State<_HomeBannerCarousel> {
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted || !_controller.hasClients) return;
       final next = (_page + 1) % widget.banners.length;
+      // Reduced motion: change ad at the same cadence, without the slide.
+      if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+        _controller.jumpToPage(next);
+        return;
+      }
       _controller.animateToPage(
         next,
         duration: const Duration(milliseconds: 350),
@@ -1449,25 +1414,32 @@ class _HomeBannerCarouselState extends State<_HomeBannerCarousel> {
   @override
   Widget build(BuildContext context) => AspectRatio(
         aspectRatio: _bannerAspectRatio,
-        child: PageView.builder(
-          controller: _controller,
-          itemCount: widget.banners.length,
-          onPageChanged: (index) => _page = index,
-          itemBuilder: (context, index) {
-            final banner = widget.banners[index];
-            final externalUrl = _validExternalBannerUrl(banner.targetUrl);
-            return GestureDetector(
-              // A null onTap makes this a no-op tap target without
-              // affecting PageView's own horizontal swipe gesture — swipe
-              // and this tap detector coexist normally in Flutter's gesture
-              // arena, no special handling needed.
-              onTap: externalUrl == null
-                  ? null
-                  : () => _openBannerUrl(externalUrl),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
+        // One rounded clip wraps the WHOLE carousel viewport rather than each
+        // page. Clipping per page left the viewport's own square edge exposed
+        // while two ads were mid-slide, so the incoming image briefly showed
+        // sharp corners. Here every frame (outgoing and incoming ads, loading
+        // and error placeholders) is cut to the same rounded rectangle.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: PageView.builder(
+              controller: _controller,
+              // The ClipRRect above is the single clip; skip PageView's own.
+              clipBehavior: Clip.none,
+              itemCount: widget.banners.length,
+              onPageChanged: (index) => _page = index,
+              itemBuilder: (context, index) {
+                final banner = widget.banners[index];
+                final externalUrl = _validExternalBannerUrl(banner.targetUrl);
+                return GestureDetector(
+                  // A null onTap makes this a no-op tap target without
+                  // affecting PageView's own horizontal swipe gesture — swipe
+                  // and this tap detector coexist normally in Flutter's
+                  // gesture arena, no special handling needed.
+                  onTap: externalUrl == null
+                      ? null
+                      : () => _openBannerUrl(externalUrl),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -1481,245 +1453,1571 @@ class _HomeBannerCarouselState extends State<_HomeBannerCarousel> {
                         child: banner.imageUrl.isEmpty
                             ? const Center(child: Icon(Icons.image_outlined))
                             : Image.network(
-                        banner.imageUrl,
-                        fit: BoxFit.contain,
-                        // A failed image (404, network hiccup, stale URL) must
-                        // never crash or blank out just this one banner — the
-                        // carousel keeps auto-rotating through the rest
-                        // regardless, since each page's Image error is scoped
-                        // to that page only.
-                        errorBuilder: (context, error, stackTrace) =>
-                            ColoredBox(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                          child: const Center(
-                              child: Icon(Icons.image_not_supported_outlined)),
-                        ),
-                      ),
+                                banner.imageUrl,
+                                fit: BoxFit.contain,
+                                // A failed image (404, network hiccup, stale
+                                // URL) must never crash or blank out just
+                                // this one banner — the carousel keeps
+                                // auto-rotating through the rest regardless,
+                                // since each page's Image error is scoped to
+                                // that page only.
+                                errorBuilder: (context, error, stackTrace) =>
+                                    ColoredBox(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                                  child: const Center(
+                                      child: Icon(
+                                          Icons.image_not_supported_outlined)),
+                                ),
+                              ),
                       ),
                     ],
                   ),
-                ),
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ),
         ),
       );
 }
 
+/// Points balance card.
+///
+/// The hero figure is the customer's real total balance. Beneath it, a
+/// compact breakdown always shows the real available points and the real
+/// pending (processing) points — including a pending figure of 0. All numbers
+/// come straight from [PointsSummary]; this widget does no arithmetic,
+/// rounding or loading logic of its own.
 class _BalanceCard extends StatelessWidget {
   const _BalanceCard({required this.points});
 
   final PointsSummary? points;
 
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [YallaColors.primaryStrong, YallaColors.primary],
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-          ),
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-                color: YallaColors.primary.withValues(alpha: .24),
-                blurRadius: 24,
-                offset: const Offset(0, 12)),
-          ],
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              left: 0,
-              top: 0,
-              child: Container(
-                width: 42,
-                height: 42,
-                decoration: const BoxDecoration(
-                    color: YallaColors.gold, shape: BoxShape.circle),
-                child: const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: YallaCashLogo(
-                    height: 27,
-                    markOnly: true,
-                    color: YallaColors.navy,
-                  ),
-                ),
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('رصيد النقاط',
-                    style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 4),
-                if (points == null)
-                  const SizedBox(
-                    width: 112,
-                    child: LinearProgressIndicator(
-                      minHeight: 8,
-                      color: Colors.white,
-                      backgroundColor: Colors.white24,
-                    ),
-                  )
-                else
-                  Text(
-                    formatNumber(points!.pointsBalance),
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 38,
-                        fontWeight: FontWeight.w900),
-                  ),
-                if (points != null && points!.heldPoints > 0)
-                  Text(
-                      'منها ${formatNumber(points!.heldPoints)} نقطة قيد المعالجة',
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 12)),
-              ],
-            ),
-          ],
-        ),
-      );
-}
+  /// Bright brand sky blue → the brand's medium blue. White hero figures stay
+  /// above 3:1 (large-text) contrast on both stops.
+  static final Color _gradientStart =
+      Color.lerp(YallaColors.primary, YallaColors.primaryStrong, .25)!;
+  static const Color _gradientEnd = YallaColors.primaryStrong;
 
-class _StoreCard extends StatelessWidget {
-  const _StoreCard({required this.store});
-
-  final PartnerStore store;
+  /// Inset behind the breakdown: deep enough for small white text to keep at
+  /// least 4.5:1 contrast anywhere on the gradient.
+  static final Color _panel = YallaColors.navy.withValues(alpha: .30);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: ExpansionTile(
-        shape: const RoundedRectangleBorder(side: BorderSide.none),
-        collapsedShape: const RoundedRectangleBorder(side: BorderSide.none),
-        tilePadding: const EdgeInsets.fromLTRB(14, 8, 10, 8),
-        childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-        expandedCrossAxisAlignment: CrossAxisAlignment.start,
-        leading: _StoreLogo(url: store.logoUrl),
-        title: Text(
-          store.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w800,
+    final dark = theme.brightness == Brightness.dark;
+    final summary = points;
+    final radius = BorderRadius.circular(YcRadius.xl);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        // Lighter at the logo corner, deeper behind the figures.
+        gradient: LinearGradient(
+          begin: AlignmentDirectional.topEnd,
+          end: AlignmentDirectional.bottomStart,
+          colors: [_gradientStart, _gradientEnd],
+        ),
+        border: dark
+            ? Border.all(color: Colors.white.withValues(alpha: .12))
+            : null,
+        boxShadow: dark
+            ? null
+            : [
+                BoxShadow(
+                  color: YallaColors.primaryStrong.withValues(alpha: .28),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Stack(
+          children: [
+            // One soft highlight at the logo corner, away from the figures.
+            PositionedDirectional(
+              top: -64,
+              end: -56,
+              child: ExcludeSemantics(
+                child: Container(
+                  width: 140,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: .06),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                YcSpace.lg,
+                14,
+                YcSpace.lg,
+                YcSpace.md,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'رصيد النقاط',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const _BalanceLogo(),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  if (summary == null)
+                    // Loading: an indeterminate bar, never a false zero. The
+                    // box matches the figure's height so the card does not
+                    // jump.
+                    SizedBox(
+                      height: 38,
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: SizedBox(
+                          width: 112,
+                          child: LinearProgressIndicator(
+                            minHeight: 8,
+                            borderRadius: BorderRadius.circular(4),
+                            color: Colors.white,
+                            backgroundColor: Colors.white24,
+                          ),
+                        ),
+                      ),
+                    )
+                  else ...[
+                    // Scales down (never wraps or overflows) for very large
+                    // balances or large text sizes.
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        formatNumber(summary.pointsBalance),
+                        maxLines: 1,
+                        style: YcType.hero(context)?.copyWith(
+                          color: Colors.white,
+                          fontSize: 34,
+                          height: 1.1,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _BalanceSplit(
+                      available: summary.availablePoints,
+                      pending: summary.heldPoints,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Official mark on the brand gold disc, at the card's end corner.
+class _BalanceLogo extends StatelessWidget {
+  const _BalanceLogo();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 32,
+        height: 32,
+        padding: const EdgeInsets.all(6),
+        decoration: const BoxDecoration(
+          color: YallaColors.gold,
+          shape: BoxShape.circle,
+        ),
+        child: const YallaCashLogo(
+          height: 20,
+          markOnly: true,
+          color: YallaColors.navy,
+        ),
+      );
+}
+
+/// "Available" and "processing" side by side on a deeper inset panel.
+class _BalanceSplit extends StatelessWidget {
+  const _BalanceSplit({required this.available, required this.pending});
+
+  final int available;
+  final int pending;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: _BalanceCard._panel,
+          borderRadius: BorderRadius.circular(YcRadius.md),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: YcSpace.md,
+            vertical: YcSpace.xs,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _SplitCell(
+                  icon: Icons.check_circle_outline_rounded,
+                  label: 'المتاح',
+                  value: available,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 30,
+                margin: const EdgeInsets.symmetric(horizontal: YcSpace.sm),
+                color: Colors.white.withValues(alpha: .25),
+              ),
+              Expanded(
+                child: _SplitCell(
+                  icon: Icons.schedule_rounded,
+                  label: 'قيد المعالجة',
+                  value: pending,
+                ),
+              ),
+            ],
           ),
         ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Row(children: [
-            Flexible(
-              child: Text(
-                store.category,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: scheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: scheme.primaryContainer,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                child: Text(
-                  'حصري',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
-          ]),
-        ),
+      );
+}
+
+/// A small label over its figure. The figure scales down rather than
+/// overflowing for very large values or text sizes.
+class _SplitCell extends StatelessWidget {
+  const _SplitCell({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final int value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return MergeSemantics(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            store.description,
-            style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+          // The full label always shows: it scales down rather than being
+          // cut on narrow screens or at large text sizes.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 13, color: Colors.white),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: Colors.white,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(children: [
-            Icon(Icons.location_on_outlined, size: 18, color: scheme.primary),
-            const SizedBox(width: 6),
-            Expanded(child: Text(store.location)),
-          ]),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              formatNumber(value),
+              maxLines: 1,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-/// Product image, or a placeholder tile when the product has no image.
-class _ProductImage extends StatelessWidget {
-  const _ProductImage({required this.url});
+/// Shared premium surface for store UI: a soft tint gradient over the theme's
+/// card colour, a hairline border and a gentle shadow. Everything is derived
+/// from the active theme, so light and dark mode both stay on-brand.
+BoxDecoration _storeSurface(BuildContext context, {double radius = 24}) {
+  final theme = Theme.of(context);
+  final scheme = theme.colorScheme;
+  final dark = theme.brightness == Brightness.dark;
+  final base = theme.cardTheme.color ?? scheme.surface;
+  final tint = Color.alphaBlend(
+    scheme.primary.withValues(alpha: dark ? .10 : .07),
+    base,
+  );
+  return BoxDecoration(
+    borderRadius: BorderRadius.circular(radius),
+    gradient: LinearGradient(
+      begin: AlignmentDirectional.topStart,
+      end: AlignmentDirectional.bottomEnd,
+      colors: [base, tint],
+    ),
+    border: Border.all(
+      color: dark
+          ? Colors.white.withValues(alpha: .10)
+          : YallaColors.navy.withValues(alpha: .08),
+    ),
+    boxShadow: [
+      BoxShadow(
+        color: (dark ? Colors.black : YallaColors.navy)
+            .withValues(alpha: dark ? .30 : .08),
+        blurRadius: 18,
+        offset: const Offset(0, 8),
+      ),
+    ],
+  );
+}
 
-  final String? url;
+/// Store card on the home list. Tapping it opens [StoreDetailsPage].
+class _StoreCard extends StatefulWidget {
+  const _StoreCard({required this.store, required this.cubit});
+
+  final PartnerStore store;
+  final CustomerAppCubit cubit;
+
+  @override
+  State<_StoreCard> createState() => _StoreCardState();
+}
+
+class _StoreCardState extends State<_StoreCard> {
+  bool _pressed = false;
+
+  /// Below this text width (in unscaled units) the card stacks its layout.
+  static const double _minTextWidth = 130;
+
+  void _setPressed(bool value) {
+    if (_pressed != value) setState(() => _pressed = value);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final placeholder = Icon(Icons.redeem_rounded, size: 28, color: scheme.primary);
-    final imageUrl = url;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: SizedBox(
-        width: 64,
-        height: 64,
-        child: ColoredBox(
-          color: scheme.primaryContainer,
-          child: imageUrl == null
-              ? Center(child: placeholder)
-              : Image.network(
-                  imageUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Center(child: placeholder),
+    final store = widget.store;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    // Logo plate: 76 (68 on narrow phones). The card shows only the store's
+    // identity — logo, name and partner badge; category and location live on
+    // the store details page. Height follows content (no fixed height).
+    final logoSize = MediaQuery.sizeOf(context).width < 360 ? 68.0 : 76.0;
+    final radius = BorderRadius.circular(20);
+    // Reduced motion: no press scale at all, not just an instant jump.
+    final reduced = YcMotion.reduced(context);
+    return AnimatedScale(
+      scale: !reduced && _pressed ? .98 : 1,
+      duration: YcMotion.resolve(context, YcMotion.fast),
+      curve: Curves.easeOut,
+      // Soft sky-blue-to-white surface with a hairline border and one gentle
+      // shadow — the same tokens as the store details page. No large shapes.
+      child: DecoratedBox(
+        decoration: _storeSurface(context, radius: 20),
+        child: Material(
+          type: MaterialType.transparency,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: radius),
+          // MergeSemantics must wrap the whole interactive subtree (not sit
+          // inside it) for its button flag and the descendant text to be
+          // combined into one node.
+          child: MergeSemantics(
+            child: Semantics(
+              button: true,
+              child: InkWell(
+                splashColor: scheme.primary.withValues(alpha: .08),
+                highlightColor: scheme.primary.withValues(alpha: .04),
+                onTapDown: (_) => _setPressed(true),
+                onTapCancel: () => _setPressed(false),
+                onTap: () {
+                  _setPressed(false);
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          StoreDetailsPage(store: store, cubit: widget.cubit),
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 12, 12),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final scale = MediaQuery.textScalerOf(context).scale(1);
+                      // Width the text column would get beside the logo, in
+                      // unscaled units. Too little (narrow phone + large text)
+                      // and the card stacks instead of truncating words.
+                      final besideWidth =
+                          constraints.maxWidth - logoSize - 12 - 10 - 28;
+                      final stacked = besideWidth / scale < _minTextWidth;
+                      final logo = _StoreLogo(
+                        url: store.logoUrl,
+                        size: stacked ? 60 : logoSize,
+                        heroTag: 'store-logo-${store.id}',
+                        raised: false,
+                      );
+                      // Name and badge as one group, vertically centred
+                      // against the logo.
+                      final details = Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            store.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              height: 1.3,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          // The exact wording is always shown in full: on
+                          // narrow screens or large text the pill scales
+                          // down slightly instead of being cut.
+                          const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: AlignmentDirectional.centerStart,
+                            child: _StoreCardPartnerBadge(),
+                          ),
+                        ],
+                      );
+                      if (stacked) {
+                        // Logo and arrow on top; the text gets the full width.
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                logo,
+                                const Spacer(),
+                                const _StoreCardArrow(),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            details,
+                          ],
+                        );
+                      }
+                      // RTL: logo on the right, the arrow on the far left.
+                      return Row(
+                        children: [
+                          logo,
+                          const SizedBox(width: 12),
+                          Expanded(child: details),
+                          const SizedBox(width: 10),
+                          const _StoreCardArrow(),
+                        ],
+                      );
+                    },
+                  ),
                 ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-/// Store logo tile. Falls back to the default storefront icon when the store
-/// has no logo or the logo fails to load.
-class _StoreLogo extends StatelessWidget {
-  const _StoreLogo({required this.url});
-
-  final String? url;
+/// Gold "exclusive partner" badge with the exact approved copy: a discreet
+/// tint, a hairline gold border and a premium medal icon.
+class _StoreCardPartnerBadge extends StatelessWidget {
+  const _StoreCardPartnerBadge();
 
   @override
   Widget build(BuildContext context) {
-    final logoUrl = url;
-    return Container(
-      width: 56,
-      height: 56,
-      clipBehavior: Clip.antiAlias,
-      padding: EdgeInsets.all(logoUrl == null ? 0 : 6),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ink = dark ? YallaColors.gold : const Color(0xFF7A4F00);
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: logoUrl == null ? YallaColors.primaryStrong : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        color: YallaColors.gold.withValues(alpha: dark ? .14 : .16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: YallaColors.gold.withValues(alpha: .50)),
       ),
-      child: logoUrl == null
-          ? const Icon(Icons.storefront_rounded, size: 26, color: Colors.white)
-          : Image.network(
-              logoUrl,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.storefront_rounded,
-                size: 26,
-                color: YallaColors.primaryStrong,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Material Icons has no literal crown glyph; this premium medal
+            // is the same mark used by the details-page exclusive badge.
+            Icon(Icons.workspace_premium_rounded, size: 15, color: ink),
+            const SizedBox(width: 5),
+            Text(
+              'شريك حصري لدى يلا كاش',
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+                color: ink,
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Small circular "forward" arrow at the card's far (left) end.
+class _StoreCardArrow extends StatelessWidget {
+  const _StoreCardArrow();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return ExcludeSemantics(
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: scheme.primary.withValues(alpha: dark ? .16 : .10),
+        ),
+        // Left-pointing chevron = "forward" in RTL.
+        child:
+            Icon(Icons.chevron_left_rounded, size: 18, color: scheme.primary),
+      ),
+    );
+  }
+}
+
+/// Dedicated store page: gradient header with an overlapping logo, the
+/// existing store information, and the store's real, view-only exclusive
+/// offers (loaded through [CustomerAppCubit.loadStoreOffers]).
+class StoreDetailsPage extends StatelessWidget {
+  const StoreDetailsPage({required this.store, required this.cubit, super.key});
+
+  final PartnerStore store;
+  final CustomerAppCubit cubit;
+
+  static const double _logoSize = 132;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final description = store.description.trim();
+    final location = store.location.trim();
+    final headerHeight =
+        MediaQuery.paddingOf(context).top + kToolbarHeight + 88;
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        elevation: 0,
+        foregroundColor: Colors.white,
+      ),
+      body: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          SizedBox(
+            height: headerHeight + _logoSize / 2,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  bottom: _logoSize / 2,
+                  child: const _StoreHeaderBackdrop(),
+                ),
+                Positioned(
+                  top: headerHeight - _logoSize / 2,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: _StoreLogo(
+                      url: store.logoUrl,
+                      size: _logoSize,
+                      heroTag: 'store-logo-${store.id}',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 32),
+            child: _FadeSlideIn(
+              child: Column(
+                children: [
+                  Text(
+                    store.name,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      const _ExclusiveBadge(),
+                      _CategoryPill(store.category),
+                    ],
+                  ),
+                  if (description.isNotEmpty || location.isNotEmpty) ...[
+                    const SizedBox(height: 22),
+                    _StoreInfoCard(
+                      description: description,
+                      location: location,
+                    ),
+                  ],
+                  const SizedBox(height: 30),
+                  const _OffersHeader(),
+                  const SizedBox(height: 12),
+                  _StoreOffersSection(cubit: cubit, storeId: store.id),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Brand gradient behind the details-page logo, with two soft decorative
+/// circles. Uses a deeper navy-blue blend in dark mode.
+class _StoreHeaderBackdrop extends StatelessWidget {
+  const _StoreHeaderBackdrop();
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    Widget circle(double size, double alpha) => DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white.withValues(alpha: alpha),
+          ),
+          child: SizedBox(width: size, height: size),
+        );
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(36)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: dark
+                ? const [Color(0xFF0B5F86), Color(0xFF123040)]
+                : const [YallaColors.primary, YallaColors.primaryStrong],
+          ),
+        ),
+        child: Stack(
+          children: [
+            PositionedDirectional(
+              top: -48,
+              start: -36,
+              child: circle(170, .09),
+            ),
+            PositionedDirectional(
+              bottom: -60,
+              end: -28,
+              child: circle(190, .07),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Store description and location on the details page.
+class _StoreInfoCard extends StatelessWidget {
+  const _StoreInfoCard({required this.description, required this.location});
+
+  final String description;
+  final String location;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: _storeSurface(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (description.isNotEmpty) ...[
+            Row(children: [
+              Icon(Icons.info_outline_rounded, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              // Flexible: wraps instead of overflowing on 320dp + large text.
+              Flexible(
+                child: Text(
+                  'عن المحل',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            Text(
+              description,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                height: 1.7,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+          if (description.isNotEmpty && location.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Divider(height: 1, color: scheme.outlineVariant),
+            const SizedBox(height: 16),
+          ],
+          if (location.isNotEmpty)
+            Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: .12),
+                ),
+                child: Icon(Icons.location_on_rounded,
+                    size: 20, color: scheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  location,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ]),
+        ],
+      ),
+    );
+  }
+}
+
+/// "العروض الحصرية" section heading with a gold accent bar.
+class _OffersHeader extends StatelessWidget {
+  const _OffersHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Container(
+        width: 5,
+        height: 26,
+        decoration: BoxDecoration(
+          color: YallaColors.gold,
+          borderRadius: BorderRadius.circular(3),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          'العروض الحصرية',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+      ),
+    ]);
+  }
+}
+
+/// The store's offers section: loading, empty, error/retry or the offer
+/// cards. It listens only to this store's offers in the Cubit, so the rest of
+/// the page (header, logo Hero, store information) never rebuilds for it and
+/// another store's offers can never appear here.
+class _StoreOffersSection extends StatefulWidget {
+  const _StoreOffersSection({required this.cubit, required this.storeId});
+
+  final CustomerAppCubit cubit;
+  final String storeId;
+
+  @override
+  State<_StoreOffersSection> createState() => _StoreOffersSectionState();
+}
+
+class _StoreOffersSectionState extends State<_StoreOffersSection> {
+  Timer? _expiryTimer;
+  DateTime? _expiryAt;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _expiryTimer?.cancel();
+    super.dispose();
+  }
+
+  void _load() => unawaited(widget.cubit.loadStoreOffers(widget.storeId));
+
+  /// Rebuilds when the next shown offer reaches its exclusive endsBefore, so
+  /// an offer disappears on time even while the page stays open.
+  void _scheduleExpiryCheck(List<StoreOffer> shown, DateTime now) {
+    DateTime? next;
+    for (final offer in shown) {
+      final end = offer.endsBefore;
+      if (end != null && end.isAfter(now) && (next == null || end.isBefore(next))) {
+        next = end;
+      }
+    }
+    if (next == _expiryAt) return;
+    _expiryTimer?.cancel();
+    _expiryAt = next;
+    if (next == null) return;
+    // Capped so a distant boundary stays within timer limits (web); the
+    // check simply runs again.
+    var wait = next.difference(now) + const Duration(milliseconds: 50);
+    if (wait > const Duration(hours: 6)) wait = const Duration(hours: 6);
+    _expiryTimer = Timer(wait, () {
+      if (mounted) setState(() => _expiryAt = null);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder<CustomerAppState>(
+        stream: widget.cubit.stream,
+        initialData: widget.cubit.state,
+        builder: (context, snapshot) {
+          final offers =
+              (snapshot.data ?? widget.cubit.state).offersFor(widget.storeId);
+          final now = DateTime.now();
+          // The server already returns only available offers of an active
+          // store; this re-check keeps the backend rule (startsAt <= now <
+          // endsBefore, exclusive end) while the page is open, and only ever
+          // shows offers that belong to this store.
+          final shown = [
+            for (final offer in offers.offers)
+              if (offer.storeId == widget.storeId && offer.isAvailableAt(now))
+                offer,
+          ];
+          _scheduleExpiryCheck(shown, now);
+
+          final Widget child;
+          if (shown.isNotEmpty) {
+            child = Column(
+              key: const ValueKey('store-offers-list'),
+              children: [
+                if (offers.status == LoadStatus.failure)
+                  _StoreOffersInlineRetry(onRetry: _load),
+                for (final offer in shown)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: _StoreOfferCard(key: ValueKey(offer.id), offer: offer),
+                  ),
+              ],
+            );
+          } else {
+            child = switch (offers.status) {
+              LoadStatus.initial ||
+              LoadStatus.loading =>
+                const _StoreOffersLoading(key: ValueKey('store-offers-loading')),
+              // 404: the store is missing or inactive, so it has no offers.
+              LoadStatus.failure when offers.failure?.statusCode != 404 =>
+                _StoreOffersError(
+                  key: const ValueKey('store-offers-error'),
+                  message: _customerFailureMessage(offers.failure),
+                  onRetry: _load,
+                ),
+              _ => const _StoreOffersEmptyState(
+                  key: ValueKey('store-offers-empty')),
+            };
+          }
+          return AnimatedSwitcher(
+            duration: YcMotion.resolve(context, YcMotion.medium),
+            child: child,
+          );
+        },
+      );
+}
+
+/// Levantine month names, as used in Syria.
+const _offerMonths = [
+  'كانون الثاني',
+  'شباط',
+  'آذار',
+  'نيسان',
+  'أيار',
+  'حزيران',
+  'تموز',
+  'آب',
+  'أيلول',
+  'تشرين الأول',
+  'تشرين الثاني',
+  'كانون الأول',
+];
+
+/// The offer's last day (inclusive Damascus calendar day, as the admin
+/// entered it), never shifted through the device time zone.
+String _offerExpiryText(StoreOffer offer) {
+  final end = offer.endDate;
+  if (end == null) return 'عرض مستمر';
+  return 'ساري حتى ${end.day} ${_offerMonths[end.month - 1]} ${end.year}';
+}
+
+/// Public offer images only (the customer endpoint's versioned URL).
+String? _publicOfferImageUrl(StoreOffer offer) {
+  final url = offer.imageUrl;
+  if (url == null || offer.imageAccess != OfferImageAccess.public) return null;
+  final scheme = Uri.tryParse(url)?.scheme;
+  return scheme == 'https' || scheme == 'http' ? url : null;
+}
+
+/// One view-only offer: image, discount label, title, description, expiry
+/// and how to use it. No coupon, QR, points or purchase action.
+class _StoreOfferCard extends StatelessWidget {
+  const _StoreOfferCard({required this.offer, super.key});
+
+  final StoreOffer offer;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final imageUrl = _publicOfferImageUrl(offer);
+    final label = offer.discountLabel?.trim() ?? '';
+    final description = offer.description.trim();
+    return Container(
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: _storeSurface(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (imageUrl != null) _StoreOfferImage(url: imageUrl, title: offer.title),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (label.isNotEmpty) ...[
+                  _OfferDiscountPill(label),
+                  const SizedBox(height: 10),
+                ],
+                Text(
+                  offer.title,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    height: 1.4,
+                  ),
+                ),
+                if (description.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    description,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      height: 1.7,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Row(children: [
+                  Icon(Icons.event_available_rounded,
+                      size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _offerExpiryText(offer),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            color: scheme.primary.withValues(
+                alpha: theme.brightness == Brightness.dark ? .16 : .07),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.phone_iphone_rounded, size: 18, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'أبرز تطبيق يلا كاش عند المحاسبة للاستفادة من العرض',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The whole offer image, never cropped: its height follows the image's
+/// own aspect ratio (letterboxed only beyond a maximum height). Hidden if it
+/// fails to load.
+class _StoreOfferImage extends StatelessWidget {
+  const _StoreOfferImage({required this.url, required this.title});
+
+  final String url;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 380),
+        child: Image.network(
+          url,
+          width: double.infinity,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
+          semanticLabel: 'صورة العرض: $title',
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+              frame == null && !wasSynchronouslyLoaded
+                  ? AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: Icon(Icons.image_outlined,
+                          size: 34,
+                          color: scheme.onSurfaceVariant.withValues(alpha: .5)),
+                    )
+                  : child,
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Free-text discount label (display only; never calculated).
+class _OfferDiscountPill extends StatelessWidget {
+  const _OfferDiscountPill(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ink = dark ? YallaColors.gold : const Color(0xFF8A5A0B);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: YallaColors.gold.withValues(alpha: dark ? .18 : .16),
+        borderRadius: BorderRadius.circular(YcRadius.pill),
+        border: Border.all(color: YallaColors.gold.withValues(alpha: .5)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.local_offer_rounded, size: 16, color: ink),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: ink,
+                ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Static placeholder card while offers load (no shimmer, so it is calm
+/// with reduced motion too).
+class _StoreOffersLoading extends StatelessWidget {
+  const _StoreOffersLoading({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final block = Theme.of(context)
+        .colorScheme
+        .onSurfaceVariant
+        .withValues(alpha: .10);
+    Widget bar(double? width, double height) => Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: block,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        );
+    return Semantics(
+      container: true,
+      label: 'جارٍ تحميل العروض',
+      child: ExcludeSemantics(
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: _storeSurface(context),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              bar(double.infinity, 120),
+              const SizedBox(height: 16),
+              bar(96, 14),
+              const SizedBox(height: 10),
+              bar(double.infinity, 12),
+              const SizedBox(height: 8),
+              bar(160, 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StoreOffersError extends StatelessWidget {
+  const _StoreOffersError({
+    required this.message,
+    required this.onRetry,
+    super.key,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        decoration: _storeSurface(context),
+        child: YcEmptyState(
+          icon: Icons.wifi_off_rounded,
+          tone: YcTone.danger,
+          title: 'تعذر تحميل العروض',
+          description: message,
+          actionLabel: 'إعادة المحاولة',
+          onAction: onRetry,
+        ),
+      );
+}
+
+/// Shown above existing offers when a reload failed.
+class _StoreOffersInlineRetry extends StatelessWidget {
+  const _StoreOffersInlineRetry({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(children: [
+        Icon(Icons.info_outline_rounded, size: 18, color: scheme.error),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text('تعذر تحديث العروض.',
+              style: Theme.of(context).textTheme.bodySmall),
+        ),
+        TextButton(onPressed: onRetry, child: const Text('إعادة المحاولة')),
+      ]),
+    );
+  }
+}
+
+/// Shown when the store has no offers available right now.
+class _StoreOffersEmptyState extends StatelessWidget {
+  const _StoreOffersEmptyState({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 34),
+      decoration: _storeSurface(context),
+      child: Column(
+        children: [
+          SizedBox(
+            width: 92,
+            height: 92,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        scheme.primary.withValues(alpha: .20),
+                        YallaColors.gold.withValues(alpha: .20),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: scheme.primary.withValues(alpha: .18),
+                    ),
+                  ),
+                  child: const SizedBox(width: 84, height: 84),
+                ),
+                Icon(Icons.local_offer_rounded,
+                    size: 38, color: scheme.primary),
+                const PositionedDirectional(
+                  top: 2,
+                  end: 4,
+                  child: Icon(Icons.auto_awesome_rounded,
+                      size: 20, color: YallaColors.gold),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'لا توجد عروض متاحة حالياً',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'ستظهر العروض الحصرية لهذا المحل هنا فور إضافتها.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              height: 1.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Category label as a soft tinted pill.
+class _CategoryPill extends StatelessWidget {
+  const _CategoryPill(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: scheme.primary,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Gold "حصري" (exclusive) pill shown on store cards and the details page.
+class _ExclusiveBadge extends StatelessWidget {
+  const _ExclusiveBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ink = dark ? YallaColors.gold : const Color(0xFF8A5A00);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: YallaColors.gold.withValues(alpha: dark ? .16 : .20),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: YallaColors.gold.withValues(alpha: .55)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.workspace_premium_rounded, size: 13, color: ink),
+            const SizedBox(width: 4),
+            Text(
+              'حصري',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: ink,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Subtle one-shot fade and rise for the details content. Skipped when the
+/// system asks for reduced motion.
+class _FadeSlideIn extends StatelessWidget {
+  const _FadeSlideIn({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: reduceMotion ? 1 : 0, end: 1),
+      duration:
+          reduceMotion ? Duration.zero : const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, (1 - t) * 18),
+          child: child,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Product image on a neutral plate. BoxFit.contain keeps the whole image
+/// visible, never cropped or stretched. Falls back to a branded placeholder
+/// when the product has no image or the image fails to load.
+class _ProductImage extends StatelessWidget {
+  const _ProductImage({required this.url, this.size = 64});
+
+  final String? url;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final imageUrl = url;
+    Widget icon(Color color) => Center(
+          child: Icon(Icons.redeem_rounded, size: size * .42, color: color),
+        );
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: imageUrl == null ? scheme.primaryContainer : Colors.white,
+        borderRadius: BorderRadius.circular(YcRadius.md),
+        border: Border.all(color: YcSurface.of(context).hairline),
+      ),
+      child: imageUrl == null
+          ? icon(scheme.primary)
+          : Padding(
+              padding: EdgeInsets.all(size * .08),
+              child: Image.network(
+                imageUrl,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+                loadingBuilder: (_, child, progress) => progress == null
+                    ? child
+                    : icon(scheme.primary.withValues(alpha: .25)),
+                errorBuilder: (_, __, ___) => icon(scheme.primary),
+              ),
+            ),
+    );
+  }
+}
+
+/// Store logo tile. Always shows the whole logo (BoxFit.contain, never cropped
+/// or stretched) on a clean white plate so any artwork stays crisp in both
+/// themes. Falls back to a branded storefront tile when the store has no logo
+/// or the logo fails to load.
+class _StoreLogo extends StatelessWidget {
+  const _StoreLogo({
+    required this.url,
+    this.size = 56,
+    this.heroTag,
+    this.raised = true,
+  });
+
+  final String? url;
+  final double size;
+
+  /// Optional hero tag so the logo glides into the store details screen.
+  final String? heroTag;
+
+  /// Raised plates (details page) get a soft shadow. Flat plates (list cards)
+  /// use a hairline border only, so the card stays calm.
+  final bool raised;
+
+  /// The plate sizes itself from its incoming constraints, so during a Hero
+  /// flight it scales smoothly between the card and the details page.
+  Widget _plate(BuildContext context, double s) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final logoUrl = url;
+    final storefront = s * 0.42;
+    final loading = Center(
+      child: Icon(
+        Icons.storefront_rounded,
+        size: storefront,
+        color: YallaColors.primary.withValues(alpha: .25),
+      ),
+    );
+    final failed = Center(
+      child: Icon(
+        Icons.storefront_rounded,
+        size: storefront,
+        color: YallaColors.primaryStrong,
+      ),
+    );
+    return Container(
+      width: s,
+      height: s,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(s * 0.26),
+        border: Border.all(
+          color: YallaColors.navy.withValues(alpha: dark ? 0 : .07),
+        ),
+        boxShadow: raised
+            ? [
+                BoxShadow(
+                  color: (dark ? Colors.black : YallaColors.navy)
+                      .withValues(alpha: dark ? .38 : .14),
+                  blurRadius: s * 0.22,
+                  offset: Offset(0, s * 0.08),
+                ),
+              ]
+            : null,
+      ),
+      child: logoUrl == null
+          ? DecoratedBox(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [YallaColors.primary, YallaColors.primaryStrong],
+                ),
+              ),
+              child: Center(
+                child: Icon(Icons.storefront_rounded,
+                    size: storefront, color: Colors.white),
+              ),
+            )
+          : raised
+              // Details page: unchanged.
+              ? Padding(
+                  padding: EdgeInsets.all(s * 0.10),
+                  child: Image.network(
+                    logoUrl,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
+                    gaplessPlayback: true,
+                    loadingBuilder: (_, child, progress) =>
+                        progress == null ? child : loading,
+                    errorBuilder: (_, __, ___) => failed,
+                  ),
+                )
+              // List cards: a slim inset, and plain background margins inside
+              // the image are trimmed from the *view* so marks with lots of
+              // built-in whitespace stay visible (see WhitespaceTrimmedLogo).
+              : Padding(
+                  padding: EdgeInsets.all(s * 0.05),
+                  child: WhitespaceTrimmedLogo(
+                    url: logoUrl,
+                    loadingBuilder: (_, child, progress) =>
+                        progress == null ? child : loading,
+                    errorBuilder: (_, __, ___) => failed,
+                  ),
+                ),
+    );
+  }
+
+  /// Cross-fades from the card plate to the details plate (and back) during
+  /// the Hero flight, since the card view may be whitespace-trimmed. The card
+  /// plate stays opaque underneath, so the white plate never turns see-through.
+  static Widget _shuttle(
+    BuildContext context,
+    Animation<double> animation,
+    HeroFlightDirection direction,
+    BuildContext fromContext,
+    BuildContext toContext,
+  ) {
+    final fromChild = (fromContext.widget as Hero).child;
+    final toChild = (toContext.widget as Hero).child;
+    // `animation` reads 0 at the list card and 1 at the details page in both
+    // directions.
+    final push = direction == HeroFlightDirection.push;
+    final card = push ? fromChild : toChild;
+    final details = push ? toChild : fromChild;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        card,
+        FadeTransition(opacity: animation, child: details),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tile = SizedBox(
+      width: size,
+      height: size,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final side = constraints.biggest.shortestSide;
+          return _plate(context, side.isFinite ? side : size);
+        },
+      ),
+    );
+    final tag = heroTag;
+    if (tag == null) return tile;
+    return Hero(
+      tag: tag,
+      // Straight-line flight (the default is an arc), which reads calmer.
+      createRectTween: (begin, end) => RectTween(begin: begin, end: end),
+      flightShuttleBuilder: _shuttle,
+      child: tile,
     );
   }
 }
@@ -1792,70 +3090,247 @@ class _CustomerQrPageState extends State<CustomerQrPage> {
   Widget build(BuildContext context) {
     final token = widget.state.qrToken;
     final failure = widget.state.failure;
-    return ListView(
-      padding: const EdgeInsets.all(22),
-      children: [
-        const _SectionTitle('كودك الشخصي'),
-        const SizedBox(height: 18),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(26),
+    final danger = YcToneColors.of(context, YcTone.danger).foreground;
+    // No stretch/glow overscroll on this page: the stretch effect would
+    // scale the QR while the list is pulled. Pull-to-refresh still works.
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(overscroll: false),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(
+          YcSpace.gutter,
+          YcSpace.sm,
+          YcSpace.gutter,
+          YcSpace.xl,
+        ),
+        children: [
+          const YcSectionHeader('كودك الشخصي'),
+          const SizedBox(height: YcSpace.sm),
+          YcCard(
+            padding: const EdgeInsets.fromLTRB(
+              YcSpace.lg,
+              YcSpace.xl,
+              YcSpace.lg,
+              YcSpace.lg,
+            ),
             child: Column(
               children: [
-                Container(
-                  width: 246,
-                  height: 246,
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22)),
-                  child: token == null
-                      ? const Center(child: CircularProgressIndicator())
-                      : QrImageView(
-                          data: token.payload,
-                          version: QrVersions.auto,
-                          size: 210,
-                          eyeStyle: const QrEyeStyle(
-                              eyeShape: QrEyeShape.square,
-                              color: YallaColors.navy),
-                          dataModuleStyle: const QrDataModuleStyle(
-                              dataModuleShape: QrDataModuleShape.square,
-                              color: YallaColors.navy),
-                        ),
+                _QrPlate(token: token),
+                const SizedBox(height: YcSpace.lg),
+                Text(
+                  widget.customer.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: YcType.item(context),
                 ),
-                const SizedBox(height: 16),
-                Text(widget.customer.name,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800, fontSize: 16)),
-                Text('#${widget.customer.id}',
-                    style: Theme.of(context).textTheme.bodySmall),
-                if (token != null)
-                  Text('ينتهي في ${_formatTime(token.expiresAt)}',
-                      style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 2),
+                // A short reference instead of the full technical id. Merchants
+                // identify customers only by scanning the QR token.
+                Text(
+                  _shortCustomerRef(widget.customer.id),
+                  textDirection: TextDirection.ltr,
+                  style: YcType.meta(context),
+                ),
+                if (token != null) ...[
+                  const SizedBox(height: YcSpace.sm),
+                  _QrExpiry(text: 'ينتهي في ${_formatTime(token.expiresAt)}'),
+                ],
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'اعرض هذا الكود على الكاشير عند الدفع، وستضاف نقاطك تلقائياً بعد تسجيل الفاتورة.',
-          textAlign: TextAlign.center,
-        ),
-        if (failure != null && token == null) ...[
-          const SizedBox(height: 12),
-          Text(
-            _customerFailureMessage(failure),
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _ensureQrToken,
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('إعادة المحاولة'),
+          const SizedBox(height: YcSpace.md),
+          const _QrInstructionCard(),
+          if (failure != null && token == null) ...[
+            const SizedBox(height: YcSpace.md),
+            YcCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.error_outline_rounded, color: danger),
+                      const SizedBox(width: YcSpace.xs),
+                      Expanded(
+                        child: Text(
+                          _customerFailureMessage(failure),
+                          style: YcType.body(context)?.copyWith(color: danger),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: YcSpace.sm),
+                  OutlinedButton.icon(
+                    onPressed: _ensureQrToken,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('إعادة المحاولة'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "How do you earn points?" instruction card beneath the QR. A small,
+/// restrained icon sits at the card's start side (the right, in RTL) with
+/// the title and description as one aligned text block beside it. Both are
+/// top-aligned against the icon, so a 1-line or 3-line description never
+/// shifts the icon off-centre.
+class _QrInstructionCard extends StatelessWidget {
+  const _QrInstructionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return YcCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const YcIconBadge(Icons.qr_code_scanner_rounded),
+          const SizedBox(width: YcSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'كيف تجمع نقاطك؟',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'أبرز الكود للكاشير عند الدفع. ستُضاف نقاطك تلقائياً بعد '
+                  'تسجيل الفاتورة.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
-      ],
+      ),
+    );
+  }
+}
+
+/// "#…" plus the last six characters of [id]; short ids are shown in full.
+String _shortCustomerRef(String id) =>
+    id.length <= 8 ? '#$id' : '#…${id.substring(id.length - 6)}';
+
+/// White QR plate. The QR is never animated, tinted or distorted: the same
+/// payload and styling as before (navy modules on pure white), at 210px with
+/// the plate's 18px padding plus the QR's own padding as quiet zone. The plate
+/// ignores text scaling and only shrinks, staying square, on very narrow
+/// screens.
+class _QrPlate extends StatelessWidget {
+  const _QrPlate({required this.token});
+
+  final CustomerQrToken? token;
+
+  static const double _plate = 246;
+  static const double _padding = 18;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = token;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final side =
+            constraints.maxWidth < _plate ? constraints.maxWidth : _plate;
+        return Center(
+          child: Container(
+            width: side,
+            height: side,
+            padding: const EdgeInsets.all(_padding),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            // The hairline is painted on top, not laid out: a layout border
+            // would shrink the QR below its exact 210px.
+            foregroundDecoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: YallaColors.navy.withValues(alpha: .08),
+              ),
+            ),
+            child: t == null
+                ? const Center(child: CircularProgressIndicator())
+                : Semantics(
+                    label: 'كود QR الشخصي',
+                    image: true,
+                    child: ExcludeSemantics(
+                      child: QrImageView(
+                        data: t.payload,
+                        version: QrVersions.auto,
+                        size: side - _padding * 2,
+                        eyeStyle: const QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: YallaColors.navy),
+                        dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: YallaColors.navy),
+                      ),
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Expiry time on a soft pill. Only this text cross-fades when the token
+/// is refreshed; the QR itself never animates.
+class _QrExpiry extends StatelessWidget {
+  const _QrExpiry({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final brand = YcToneColors.of(context, YcTone.brand);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: brand.background,
+        borderRadius: BorderRadius.circular(YcRadius.pill),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: YcSpace.sm,
+          vertical: 6,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.schedule_rounded, size: 16, color: brand.foreground),
+            const SizedBox(width: 6),
+            Flexible(
+              child: AnimatedSwitcher(
+                duration: YcMotion.resolve(context, YcMotion.medium),
+                child: Text(
+                  text,
+                  key: ValueKey(text),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: brand.foreground,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1865,6 +3340,10 @@ class CustomerWalletPage extends StatelessWidget {
     required this.transactions,
     required this.customer,
     this.productRedemptions = const [],
+    this.cashRequests = const [],
+    this.loading = false,
+    this.failed = false,
+    this.onRetry,
     super.key,
   });
 
@@ -1877,98 +3356,227 @@ class CustomerWalletPage extends StatelessWidget {
   /// never removed.
   final List<ProductRedemption> productRedemptions;
 
+  /// The customer's cash withdrawal requests, in the order they arrive.
+  final List<CashRedemptionRequest> cashRequests;
+
+  /// The wallet data has not arrived yet. Lists show quiet placeholders
+  /// instead of a false "nothing here yet" message.
+  final bool loading;
+
+  /// Loading the wallet data failed; shows a retry state.
+  final bool failed;
+  final VoidCallback? onRetry;
+
   @override
   Widget build(BuildContext context) {
+    final retry = onRetry;
     return ListView(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(
+        YcSpace.gutter,
+        YcSpace.sm,
+        YcSpace.gutter,
+        YcSpace.xl,
+      ),
       children: [
-        const _SectionTitle('سجل العمليات'),
-        const SizedBox(height: 10),
-        if (transactions.isEmpty)
-          const _EmptyState(
+        if (failed)
+          YcEmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'تعذر تحميل السجل',
+            description: 'تحقق من اتصالك ثم حاول مرة أخرى.',
+            actionLabel: retry == null ? null : 'إعادة المحاولة',
+            onAction: retry,
+          )
+        else ...[
+          const YcSectionHeader('سجل العمليات'),
+          const SizedBox(height: YcSpace.sm),
+          if (loading)
+            const YcSkeleton()
+          else if (transactions.isEmpty)
+            const YcEmptyState(
               icon: Icons.receipt_long_outlined,
-              text: 'لا توجد عمليات حتى الآن')
-        else
-          ...transactions.map((transaction) => Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                      child: Icon(Icons.receipt_long_outlined)),
-                  title: Text(transaction.storeName,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  subtitle: Text(
-                      '${formatDate(transaction.createdAt)} · فاتورة ${formatNumber(transaction.amountSyp)} ل.س'),
-                  trailing: Text(
-                    '+${formatNumber(transaction.customerPointsEarned)}',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w900),
-                  ),
-                ),
-              )),
-        const SizedBox(height: 22),
-        const _SectionTitle('طلبات استبدال المنتجات'),
-        const SizedBox(height: 10),
-        if (productRedemptions.isEmpty)
-          const _EmptyState(
-              icon: Icons.redeem_outlined, text: 'لا توجد طلبات استبدال بعد')
-        else
-          ...productRedemptions.map((redemption) {
-            final card = Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              child: ListTile(
-                leading: CircleAvatar(
-                    child:
-                        Icon(_productRedemptionStatusIcon(redemption.status))),
-                title: Text(redemption.productName ?? 'منتج رقمي',
-                    style: const TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text(
-                  [
-                    formatDate(redemption.createdAt),
-                    if (redemption.phoneNumber != null &&
-                        redemption.phoneNumber!.isNotEmpty)
-                      redemption.phoneNumber!,
-                  ].join(' · '),
-                ),
-                trailing: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text('${formatNumber(redemption.pointsCostSnapshot)} نقطة',
-                        style: const TextStyle(fontWeight: FontWeight.w900)),
-                    Text(
-                      _productRedemptionStatusLabel(redemption.status),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _productRedemptionStatusColor(
-                            context, redemption.status),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-            // Only the completed (FULFILLED) history entry is dimmed — the
-            // request is kept permanently, never removed, just visually
-            // muted. PENDING/REJECTED entries render at full opacity.
-            return redemption.status == RedemptionStatus.fulfilled
-                ? Opacity(opacity: 0.55, child: card)
-                : card;
-          }),
+              title: 'لا توجد عمليات حتى الآن',
+            )
+          else
+            ...transactions.map((transaction) => Padding(
+                  padding: const EdgeInsets.only(bottom: YcSpace.xs),
+                  child: _TransactionTile(transaction: transaction),
+                )),
+          const SizedBox(height: YcSpace.xl),
+          const YcSectionHeader('طلبات سحب الكاش'),
+          const SizedBox(height: YcSpace.sm),
+          if (loading)
+            const YcSkeleton(rows: 2)
+          else if (cashRequests.isEmpty)
+            const YcEmptyState(
+              icon: Icons.payments_outlined,
+              title: 'لا توجد طلبات سحب بعد',
+            )
+          else
+            ...cashRequests.map((request) => Padding(
+                  padding: const EdgeInsets.only(bottom: YcSpace.xs),
+                  child: _CashRequestTile(request: request),
+                )),
+          const SizedBox(height: YcSpace.xl),
+          const YcSectionHeader('طلبات استبدال المنتجات'),
+          const SizedBox(height: YcSpace.sm),
+          if (loading)
+            const YcSkeleton(rows: 2)
+          else if (productRedemptions.isEmpty)
+            const YcEmptyState(
+              icon: Icons.redeem_outlined,
+              title: 'لا توجد طلبات استبدال بعد',
+            )
+          else
+            ...productRedemptions.map((redemption) => Padding(
+                  padding: const EdgeInsets.only(bottom: YcSpace.xs),
+                  child: _RedemptionTile(redemption: redemption),
+                )),
+        ],
       ],
     );
   }
 }
 
-IconData _productRedemptionStatusIcon(RedemptionStatus status) {
+/// An earned-points entry: store, date, invoice amount and the points
+/// earned. Transactions carry no other status, so each one is a credit,
+/// marked with the success tone and a "+" amount.
+class _TransactionTile extends StatelessWidget {
+  const _TransactionTile({required this.transaction});
+
+  final LoyaltyTransaction transaction;
+
+  @override
+  Widget build(BuildContext context) => YcCard(
+        padding: EdgeInsets.zero,
+        child: YcListRow(
+          icon: Icons.receipt_long_rounded,
+          iconTone: YcTone.success,
+          title: transaction.storeName,
+          subtitle: '${formatDate(transaction.createdAt)} · فاتورة '
+              '${formatNumber(transaction.amountSyp)} ل.س',
+          // Value and unit on one line, matching the redemption tile below.
+          trailing: _PointsAmount(
+            '+${formatNumber(transaction.customerPointsEarned)} نقطة',
+            color: YcToneColors.of(context, YcTone.success).foreground,
+            unit: false,
+          ),
+        ),
+      );
+}
+
+/// A cash withdrawal request: the cash amount, its date and points, and the
+/// real status from the data (pending, settled or rejected).
+class _CashRequestTile extends StatelessWidget {
+  const _CashRequestTile({required this.request});
+
+  final CashRedemptionRequest request;
+
+  @override
+  Widget build(BuildContext context) => YcCard(
+        padding: EdgeInsets.zero,
+        child: YcListRow(
+          icon: Icons.payments_outlined,
+          title: '${formatNumber(request.cashValueSyp)} ل.س',
+          subtitle: '${formatDate(request.createdAt)} · '
+              '${formatNumber(request.pointsRequested)} نقطة',
+          trailing: _cashRequestStatusChip(request.status),
+        ),
+      );
+}
+
+YcStatusChip _cashRequestStatusChip(CashRequestStatus status) {
   switch (status) {
-    case RedemptionStatus.fulfilled:
-      return Icons.check_circle_outline_rounded;
-    case RedemptionStatus.rejected:
-      return Icons.cancel_outlined;
+    case CashRequestStatus.pending:
+      return const YcStatusChip.pending('قيد المعالجة');
+    case CashRequestStatus.settled:
+      return const YcStatusChip.completed('تم الصرف');
+    case CashRequestStatus.rejected:
+      return const YcStatusChip.rejected('تم رفض الطلب');
+  }
+}
+
+/// A digital-product redemption request with its status chip.
+class _RedemptionTile extends StatelessWidget {
+  const _RedemptionTile({required this.redemption});
+
+  final ProductRedemption redemption;
+
+  @override
+  Widget build(BuildContext context) {
+    final phone = redemption.phoneNumber;
+    final tile = YcCard(
+      padding: EdgeInsets.zero,
+      child: YcListRow(
+        icon: Icons.redeem_rounded,
+        title: redemption.productName ?? 'منتج رقمي',
+        subtitle: [
+          formatDate(redemption.createdAt),
+          if (phone != null && phone.isNotEmpty) phone,
+        ].join(' · '),
+        trailing: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _PointsAmount(
+              '${formatNumber(redemption.pointsCostSnapshot)} نقطة',
+              unit: false,
+            ),
+            const SizedBox(height: YcSpace.xxs),
+            _redemptionStatusChip(redemption.status),
+          ],
+        ),
+      ),
+    );
+    // Only the completed (FULFILLED) history entry is dimmed — the
+    // request is kept permanently, never removed, just visually
+    // muted. PENDING/REJECTED entries render at full opacity.
+    return redemption.status == RedemptionStatus.fulfilled
+        ? Opacity(opacity: 0.55, child: tile)
+        : tile;
+  }
+}
+
+/// Points figure for list trailing slots. With [unit], a quiet "نقطة"
+/// line sits under the figure.
+class _PointsAmount extends StatelessWidget {
+  const _PointsAmount(this.text, {this.color, this.unit = true});
+
+  final String text;
+  final Color? color;
+  final bool unit;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w900,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        if (unit) Text('نقطة', style: YcType.meta(context)),
+      ],
+    );
+  }
+}
+
+YcStatusChip _redemptionStatusChip(RedemptionStatus status) {
+  final label = _productRedemptionStatusLabel(status);
+  switch (status) {
     case RedemptionStatus.pending:
-      return Icons.hourglass_top_rounded;
+      return YcStatusChip.pending(label);
+    case RedemptionStatus.fulfilled:
+      return YcStatusChip.completed(label);
+    case RedemptionStatus.rejected:
+      return YcStatusChip.rejected(label);
   }
 }
 
@@ -1983,17 +3591,24 @@ String _productRedemptionStatusLabel(RedemptionStatus status) {
   }
 }
 
-Color _productRedemptionStatusColor(
-    BuildContext context, RedemptionStatus status) {
-  final scheme = Theme.of(context).colorScheme;
-  switch (status) {
-    case RedemptionStatus.fulfilled:
-      return scheme.primary;
-    case RedemptionStatus.rejected:
-      return scheme.error;
-    case RedemptionStatus.pending:
-      return scheme.onSurfaceVariant;
-  }
+/// Visual progress toward a product: the customer's available points over
+/// the product's cost, clamped to 0–1. A product that costs nothing counts
+/// as fully reachable.
+double _progressTowards(int availablePoints, int costInPoints) {
+  if (costInPoints <= 0) return 1;
+  return (availablePoints / costInPoints).clamp(0.0, 1.0);
+}
+
+/// Motivational copy for a product's progress bar, from the exact same
+/// [progress] value the bar renders (0–1). Carries no point numbers or
+/// percentages. Thresholds are inclusive at the lower bound.
+String _motivationFor(double progress) {
+  if (progress >= 1) return 'مبروك! مكافأتك جاهزة للاستبدال';
+  if (progress >= .75) return 'باقيلك شوي، مكافأتك صارت قريبة!';
+  if (progress >= .5) return 'قطعت شوط حلو نحو مكافأتك!';
+  if (progress >= .25) return 'بداية حلوة، كمّل تجميع!';
+  if (progress > 0) return 'كل نقطة بتقرّبك من مكافأتك!';
+  return 'رحلتك للمكافأة بتبدأ من هون!';
 }
 
 class CustomerRewardsPage extends StatefulWidget {
@@ -2010,6 +3625,11 @@ class CustomerRewardsPage extends StatefulWidget {
 class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
   final cashPointsController = TextEditingController();
 
+  /// In-flight guards so a double tap cannot send the same request twice.
+  /// They only disable buttons; the submission code itself is unchanged.
+  bool _submittingCash = false;
+  String? _redeemingProductId;
+
   @override
   void dispose() {
     cashPointsController.dispose();
@@ -2019,66 +3639,98 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
   @override
   Widget build(BuildContext context) {
     final customer = widget.state.customer!;
-    final available =
-        widget.state.points?.availablePoints ?? customer.pointsBalance;
     final requested = int.tryParse(cashPointsController.text) ?? 0;
     final pointValue = _pointValueSyp(widget.state.cashRequests);
+    // Points, products and requests arrive in one batch with the points
+    // summary, so a null summary means that data has not loaded yet.
+    final summary = widget.state.points;
+    final failed = summary == null && widget.state.status == LoadStatus.failure;
+    final loading = summary == null && !failed;
+    // The real available points, or null while unknown. There is no
+    // fallback to the total balance: redemption waits until this is loaded.
+    final available = summary?.availablePoints;
+    // Submission rule: unchanged once available points are known.
+    final canSubmitCash =
+        available != null && requested > 0 && requested <= available;
+    // Feedback mirrors that rule exactly: an error shows only when something
+    // was typed and the rule rejects it (never while the balance is unknown).
+    final String? cashError = available == null ||
+            cashPointsController.text.trim().isEmpty ||
+            canSubmitCash
+        ? null
+        : requested <= 0
+            ? 'أدخل عدداً صحيحاً أكبر من صفر'
+            : 'العدد أكبر من رصيدك المتاح';
     return ListView(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(
+        YcSpace.gutter,
+        YcSpace.sm,
+        YcSpace.gutter,
+        YcSpace.xl,
+      ),
       children: [
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(20),
-          ),
+        _AvailablePointsCard(
+          summary: summary,
+          failed: failed,
+          onRetry: widget.cubit.refresh,
+        ),
+        const SizedBox(height: YcSpace.xl),
+        const YcSectionHeader('استبدال نقاط بكاش'),
+        const SizedBox(height: YcSpace.sm),
+        YcCard(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('رصيدك المتاح'),
-              Text('${formatNumber(available)} نقطة',
-                  style: const TextStyle(
-                      fontSize: 26, fontWeight: FontWeight.w900)),
+              TextField(
+                controller: cashPointsController,
+                keyboardType: TextInputType.number,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'عدد النقاط',
+                  prefixIcon: const Icon(Icons.savings_outlined),
+                  suffixText: 'نقطة',
+                  errorText: cashError,
+                  helperText: available == null
+                      ? 'يتاح الإرسال بعد تحميل رصيدك المتاح'
+                      : cashError == null
+                          ? 'الحد الأقصى ${formatNumber(available)} نقطة'
+                          : null,
+                ),
+              ),
+              const SizedBox(height: YcSpace.sm),
+              _ConversionRow(valueSyp: (requested * pointValue).round()),
+              const SizedBox(height: YcSpace.md),
+              FilledButton(
+                onPressed: canSubmitCash && !_submittingCash
+                    ? () => _submitCash(customer, requested)
+                    : null,
+                child: _submittingCash
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.4),
+                      )
+                    : const Text('إرسال طلب الاستبدال'),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 22),
-        const _SectionTitle('استبدال نقاط بكاش'),
-        const SizedBox(height: 10),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: cashPointsController,
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                      labelText: 'عدد النقاط',
-                      prefixIcon: Icon(Icons.savings_outlined)),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                    'القيمة: ${formatNumber((requested * pointValue).round())} ل.س'),
-                const SizedBox(height: 14),
-                FilledButton(
-                  onPressed: requested > 0 && requested <= available
-                      ? () => _requestCash(customer, requested)
-                      : null,
-                  child: const Text('إرسال طلب الاستبدال'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 22),
-        const _SectionTitle('منتجات رقمية'),
-        const SizedBox(height: 10),
-        if (widget.state.products.isEmpty)
-          const _EmptyState(
-              icon: Icons.redeem_outlined, text: 'لا توجد منتجات متاحة حالياً')
+        const SizedBox(height: YcSpace.xl),
+        const YcSectionHeader('منتجات رقمية'),
+        const SizedBox(height: YcSpace.sm),
+        if (failed)
+          YcEmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'تعذر تحميل المنتجات',
+            actionLabel: 'إعادة المحاولة',
+            onAction: widget.cubit.refresh,
+          )
+        else if (loading)
+          const YcSkeleton(rows: 2)
+        else if (widget.state.products.isEmpty)
+          const YcEmptyState(
+            icon: Icons.redeem_outlined,
+            title: 'لا توجد منتجات متاحة حالياً',
+          )
         else
           ...widget.state.products.map((product) {
             // Only an ACTIVE PENDING request for this exact product blocks
@@ -2089,52 +3741,51 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
                   redemption.productId == product.id &&
                   redemption.status == RedemptionStatus.pending,
             );
-            return Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20)),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(children: [
-                  _ProductImage(url: product.imageUrl),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(product.name,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${formatNumber(product.costInPoints)} نقطة',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  hasPendingRequest
-                      ? const OutlinedButton(
-                          onPressed: null,
-                          child: Text('قيد المراجعة'),
-                        )
-                      : OutlinedButton(
-                          onPressed: available >= product.costInPoints
-                              ? () => _redeemProduct(customer, product)
-                              : null,
-                          child: const Text('استبدال'),
-                        ),
-                ]),
+            // Progress is shown for every active product without a pending
+            // request, from the real available points (never the total).
+            final progress =
+                available != null && product.isActive && !hasPendingRequest
+                    ? _progressTowards(available, product.costInPoints)
+                    : null;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: YcSpace.sm),
+              child: _ProductCard(
+                product: product,
+                hasPendingRequest: hasPendingRequest,
+                // Unchanged redemption rule once available points are
+                // known, plus the in-flight guard.
+                canRedeem: available != null &&
+                    available >= product.costInPoints &&
+                    _redeemingProductId == null,
+                busy: _redeemingProductId == product.id,
+                progress: progress,
+                onRedeem: () => _startRedeem(customer, product),
               ),
             );
           }),
       ],
     );
+  }
+
+  Future<void> _submitCash(Customer customer, int points) async {
+    // A second tap in the same frame still reaches the enabled button.
+    if (_submittingCash) return;
+    setState(() => _submittingCash = true);
+    try {
+      await _requestCash(customer, points);
+    } finally {
+      if (mounted) setState(() => _submittingCash = false);
+    }
+  }
+
+  Future<void> _startRedeem(Customer customer, DigitalProduct product) async {
+    if (_redeemingProductId != null) return;
+    setState(() => _redeemingProductId = product.id);
+    try {
+      await _redeemProduct(customer, product);
+    } finally {
+      if (mounted) setState(() => _redeemingProductId = null);
+    }
   }
 
   Future<void> _requestCash(Customer customer, int points) async {
@@ -2189,6 +3840,322 @@ class _CustomerRewardsPageState extends State<CustomerRewardsPage> {
   }
 }
 
+/// Available-points summary at the top of the store tab. Shows the real
+/// available points once loaded, a quiet placeholder while loading, and a
+/// retry when loading failed (never the total balance in their place).
+class _AvailablePointsCard extends StatelessWidget {
+  const _AvailablePointsCard({
+    required this.summary,
+    required this.failed,
+    required this.onRetry,
+  });
+
+  final PointsSummary? summary;
+  final bool failed;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final s = summary;
+    final Widget value;
+    if (s != null) {
+      value = FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: AlignmentDirectional.centerStart,
+        child: Text(
+          '${formatNumber(s.availablePoints)} نقطة',
+          maxLines: 1,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+            height: 1.2,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      );
+    } else if (failed) {
+      value = Row(
+        children: [
+          Flexible(
+            child: Text(
+              'تعذر تحميل الرصيد',
+              style: YcType.meta(context)?.copyWith(
+                color: YcToneColors.of(context, YcTone.danger).foreground,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('إعادة المحاولة')),
+        ],
+      );
+    } else {
+      value = Semantics(
+        label: 'جارٍ التحميل',
+        child: Container(
+          width: 120,
+          height: 22,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.onSurface.withValues(
+                alpha: theme.brightness == Brightness.dark ? .10 : .07),
+            borderRadius: BorderRadius.circular(6),
+          ),
+        ),
+      );
+    }
+    return YcCard(
+      child: Row(
+        children: [
+          const YcIconBadge(Icons.account_balance_wallet_rounded, size: 48),
+          const SizedBox(width: YcSpace.md),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('رصيدك المتاح', style: YcType.meta(context)),
+                const SizedBox(height: 2),
+                value,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Live cash value of the typed points ("القيمة"), on a soft tinted panel.
+class _ConversionRow extends StatelessWidget {
+  const _ConversionRow({required this.valueSyp});
+
+  final int valueSyp;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    return MergeSemantics(
+      child: Semantics(
+        liveRegion: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: scheme.primary.withValues(alpha: dark ? .14 : .07),
+            borderRadius: BorderRadius.circular(YcRadius.md),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: YcSpace.md,
+              vertical: YcSpace.sm,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.payments_outlined, size: 20, color: scheme.primary),
+                const SizedBox(width: YcSpace.xs),
+                Text(
+                  'القيمة',
+                  style: YcType.meta(context)
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(width: YcSpace.sm),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: Text(
+                      '${formatNumber(valueSyp)} ل.س',
+                      maxLines: 1,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Digital product card: uncropped image, name and cost, then a bottom row
+/// with the progress bar (eligible products only) and the action.
+class _ProductCard extends StatelessWidget {
+  const _ProductCard({
+    required this.product,
+    required this.hasPendingRequest,
+    required this.canRedeem,
+    required this.busy,
+    required this.progress,
+    required this.onRedeem,
+  });
+
+  final DigitalProduct product;
+  final bool hasPendingRequest;
+  final bool canRedeem;
+  final bool busy;
+
+  /// Null hides the bar (inactive product or a pending request).
+  final double? progress;
+  final VoidCallback onRedeem;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final p = progress;
+    final Widget action = hasPendingRequest
+        ? const YcStatusChip.pending('قيد المراجعة')
+        : FilledButton.tonal(
+            onPressed: canRedeem && !busy ? onRedeem : null,
+            // The shared theme makes filled buttons full width; this one
+            // sits in a row, so it gets a compact size.
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(88, 40),
+              padding: const EdgeInsets.symmetric(horizontal: YcSpace.md),
+            ),
+            // While busy the button is only disabled: the flow may be showing
+            // the phone dialog, so no spinner runs behind it.
+            child: const Text(
+              'استبدال',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          );
+    return YcCard(
+      padding: const EdgeInsets.symmetric(
+        horizontal: YcSpace.md,
+        vertical: YcSpace.sm,
+      ),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _ProductImage(url: product.imageUrl, size: 64),
+              const SizedBox(width: YcSpace.sm),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        height: 1.25,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${formatNumber(product.costInPoints)} نقطة',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color:
+                            YcToneColors.of(context, YcTone.brand).foreground,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: YcSpace.xs),
+          // The action may take at most 60% of the row, so a long status
+          // shrinks (chips ellipsize) instead of overflowing at large text.
+          LayoutBuilder(
+            builder: (context, constraints) => Row(
+              children: [
+                Expanded(
+                  child: p == null
+                      ? const SizedBox.shrink()
+                      : YcProgressBar(
+                          value: p,
+                          semanticLabel: 'التقدم نحو ${product.name}',
+                        ),
+                ),
+                const SizedBox(width: YcSpace.md),
+                ConstrainedBox(
+                  constraints:
+                      BoxConstraints(maxWidth: constraints.maxWidth * .6),
+                  child: action,
+                ),
+              ],
+            ),
+          ),
+          // Directly beneath the bar, spanning the full card width. Only for
+          // an eligible product: the real progress is known (balance loaded)
+          // and there is no pending request — the same condition the bar
+          // itself uses, so the two never disagree.
+          if (p != null) ...[
+            const SizedBox(height: YcSpace.xxs),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: _ProductMotivation(progress: p),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Short motivational line beneath an eligible product's progress bar.
+/// Carries no point numbers or percentages — only the fixed copy for each
+/// real progress threshold. Cross-fades when the message changes; the swap
+/// is instant under reduced motion rather than skipped, so the new message
+/// is still shown.
+class _ProductMotivation extends StatelessWidget {
+  const _ProductMotivation({required this.progress});
+
+  /// Same 0–1 value the progress bar renders.
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final complete = progress >= 1;
+    final tone = complete ? YcTone.success : YcTone.brand;
+    final color = YcToneColors.of(context, tone).foreground;
+    final message = _motivationFor(progress);
+    return AnimatedSwitcher(
+      duration: YcMotion.resolve(context, YcMotion.medium),
+      child: Row(
+        key: ValueKey(message),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            complete ? Icons.check_circle_rounded : Icons.auto_awesome_rounded,
+            size: 14,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              message,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _captionStyle(context, color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Restrained, brand-coloured caption style.
+  TextStyle? _captionStyle(BuildContext context, Color color) =>
+      Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w700,
+          );
+}
+
 /// Phone-number prompt for digital product redemption. Owns its own
 /// TextEditingController lifecycle.
 class _PhoneNumberDialog extends StatefulWidget {
@@ -2222,40 +4189,6 @@ class _PhoneNumberDialogState extends State<_PhoneNumberDialog> {
               onPressed: () => Navigator.pop(context, controller.text),
               child: const Text('تأكيد')),
         ],
-      );
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: Theme.of(context)
-            .textTheme
-            .titleMedium
-            ?.copyWith(fontWeight: FontWeight.w900),
-      );
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 64),
-        child: Column(
-          children: [
-            Icon(icon, size: 56, color: Theme.of(context).colorScheme.outline),
-            const SizedBox(height: 12),
-            Text(text),
-          ],
-        ),
       );
 }
 
