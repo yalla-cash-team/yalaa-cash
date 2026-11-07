@@ -1,3 +1,4 @@
+import 'package:yalla_cash_core/src/customer_notifications.dart';
 import 'package:yalla_cash_core/src/data/auth_token_store.dart';
 import 'package:yalla_cash_core/src/models.dart';
 import 'package:yalla_cash_core/src/store_offers.dart';
@@ -300,6 +301,19 @@ abstract class YallaCashRepository {
   Future<MonthlySettlementPreview> previewMonthlySettlement(String month);
   Future<MonthlySettlementRunResult> runMonthlySettlement(String month);
   Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory();
+
+  // ---- Customer notification inbox (signed-in customer's own only) ----
+
+  /// Newest first. [unreadOnly] (default) lists only unread entries; the
+  /// unread count always covers the whole inbox. Listing never marks read.
+  Future<CustomerNotificationInbox> listCustomerNotifications({
+    bool unreadOnly = true,
+  });
+
+  /// Marks exactly this one notification as read.
+  Future<CustomerNotificationReadResult> markCustomerNotificationRead(
+    String notificationId,
+  );
 
   // ---- Store offers (view-only; see docs/STORE_OFFERS_API.md) ----
 

@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:yalla_cash_core/src/data/auth_token_store.dart';
 import 'package:yalla_cash_core/src/core/failure.dart';
+import 'package:yalla_cash_core/src/customer_notifications.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/in_memory_store.dart';
 import 'package:yalla_cash_core/src/models.dart';
@@ -20,6 +21,60 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
   /// offers are fabricated. Insertion-ordered.
   final Map<String, _MemoryOffer> _offers = {};
   var _offerSequence = 0;
+
+  /// Customer id -> that customer's notification inbox (starts empty).
+  final Map<String, List<CustomerNotification>> _inboxes = {};
+  var _notificationSequence = 0;
+
+  @override
+  Future<CustomerNotificationInbox> listCustomerNotifications({
+    bool unreadOnly = true,
+  }) async {
+    final inbox = _currentInbox();
+    final items = [
+      for (final n in inbox)
+        if (!unreadOnly || !n.isRead) n,
+    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return CustomerNotificationInbox(
+      items: List.unmodifiable(items),
+      unreadCount: inbox.where((n) => !n.isRead).length,
+    );
+  }
+
+  @override
+  Future<CustomerNotificationReadResult> markCustomerNotificationRead(
+    String notificationId,
+  ) async {
+    final inbox = _currentInbox();
+    final index = inbox.indexWhere((n) => n.id == notificationId);
+    if (index < 0) {
+      throw const YallaCashFailure(
+        statusCode: 404,
+        code: 'not_found',
+        message: 'الإشعار غير موجود.',
+      );
+    }
+    if (!inbox[index].isRead) {
+      inbox[index] = inbox[index].markedRead(_clock().toUtc());
+    }
+    return CustomerNotificationReadResult(
+      notification: inbox[index],
+      unreadCount: inbox.where((n) => !n.isRead).length,
+    );
+  }
+
+  /// Only the signed-in customer's own inbox is ever reachable.
+  List<CustomerNotification> _currentInbox() {
+    final customer = _store.currentCustomer;
+    if (customer == null) {
+      throw const YallaCashFailure(
+        statusCode: 401,
+        code: 'unauthorized',
+        message: 'يرجى تسجيل الدخول.',
+      );
+    }
+    return _inboxes.putIfAbsent(customer.id, () => []);
+  }
 
   @override
   Future<bool> hasSavedSession() async => _store.currentCustomer != null;
@@ -467,6 +522,20 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     required String body,
     required String idempotencyKey,
   }) async {
+    // Like the backend: every customer gets one inbox entry per broadcast,
+    // and a repeated key adds nothing.
+    final now = _clock().toUtc();
+    for (final customer in _store.customers) {
+      final inbox = _inboxes.putIfAbsent(customer.id, () => []);
+      if (inbox.any((n) => n.broadcastId == idempotencyKey)) continue;
+      inbox.add(CustomerNotification(
+        id: 'notification-${++_notificationSequence}',
+        broadcastId: idempotencyKey,
+        title: title,
+        body: body,
+        createdAt: now.add(Duration(microseconds: _notificationSequence)),
+      ));
+    }
     return NotificationBroadcast(
       id: idempotencyKey,
       title: title,

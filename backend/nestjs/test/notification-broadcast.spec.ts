@@ -1,6 +1,7 @@
 import { ConflictException } from "@nestjs/common";
 import { BroadcastStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { CustomerNotificationService } from "../src/notifications/customer-notification.service";
 import { FcmService } from "../src/notifications/fcm.service";
 import { NotificationBroadcastService } from "../src/notifications/notification-broadcast.service";
 
@@ -29,11 +30,13 @@ function setup() {
       staleRemoved: 1,
     }),
   };
+  const inbox = { deliverBroadcast: jest.fn().mockResolvedValue(12) };
   const service = new NotificationBroadcastService(
     prisma as unknown as PrismaService,
     fcm as unknown as FcmService,
+    inbox as unknown as CustomerNotificationService,
   );
-  return { service, prisma, fcm };
+  return { service, prisma, fcm, inbox };
 }
 
 const request = {
@@ -75,6 +78,8 @@ describe("NotificationBroadcastService", () => {
     expect(fcm.sendToAllCustomers).toHaveBeenCalledWith({
       title: "Hello",
       body: "New offers this week",
+      // The push carries the broadcast id so a tap can mark the inbox entry.
+      data: { type: "broadcast", broadcastId: "b1" },
     });
     expect(result.status).toBe(BroadcastStatus.PARTIAL);
     expect(result.recipientCount).toBe(10);

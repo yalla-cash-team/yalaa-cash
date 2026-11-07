@@ -27,7 +27,15 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.firstName,
     super.key,
     this.showGreeting = true,
+    this.unreadNotifications = 0,
+    this.onOpenNotifications,
   });
+
+  /// Unread inbox entries; the bell shows a small dot when above zero.
+  final int unreadNotifications;
+
+  /// Opens the notification inbox.
+  final VoidCallback? onOpenNotifications;
 
   /// The customer's first name (empty shows the greeting word alone).
   final String firstName;
@@ -95,13 +103,12 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
                 child: Builder(
                   builder: (context) => _HeaderButton(
                     icon: Icons.notifications_none_rounded,
-                    tooltip: 'الإشعارات',
-                    // No unread indicator: there is no inbox to count from.
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const CustomerNotificationsPage(),
-                      ),
-                    ),
+                    tooltip: unreadNotifications > 0
+                        ? 'الإشعارات، $unreadNotifications غير مقروءة'
+                        : 'الإشعارات',
+                    // A subtle dot only when real unread notifications exist.
+                    showDot: unreadNotifications > 0,
+                    onPressed: onOpenNotifications ?? () {},
                   ),
                 ),
               ),
@@ -125,15 +132,27 @@ class _HeaderButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.showDot = false,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onPressed;
 
+  /// Small unread dot at the icon's top corner (no number).
+  final bool showDot;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final Widget glyph = showDot
+        ? Badge(
+            key: const Key('notifications-unread-dot'),
+            smallSize: 8,
+            backgroundColor: YallaColors.danger,
+            child: Icon(icon),
+          )
+        : Icon(icon);
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
@@ -148,7 +167,7 @@ class _HeaderButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(YcRadius.sm),
         ),
       ),
-      icon: Icon(icon),
+      icon: glyph,
     );
   }
 }
@@ -187,48 +206,6 @@ class _GreetingRow extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// Notifications screen opened from the header bell.
-///
-/// The backend exposes no customer notification inbox (push messages are
-/// delivered by the device, and the only stored history is the admin-side
-/// broadcast log), so this screen says so plainly instead of inventing
-/// notifications or unread counts.
-class CustomerNotificationsPage extends StatelessWidget {
-  const CustomerNotificationsPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('الإشعارات'),
-        centerTitle: true,
-        backgroundColor: theme.scaffoldBackgroundColor,
-        surfaceTintColor: Colors.transparent,
-        scrolledUnderElevation: 0,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(
-          YcSpace.gutter,
-          YcSpace.md,
-          YcSpace.gutter,
-          YcSpace.xl,
-        ),
-        children: const [
-          YcCard(
-            child: YcEmptyState(
-              icon: Icons.notifications_none_rounded,
-              title: 'سجل الإشعارات غير متاح بعد',
-              description: 'ستصلك إشعارات يلا كاش على جهازك كالمعتاد، لكن عرض '
-                  'سجل الإشعارات داخل التطبيق غير متاح حالياً.',
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -5,7 +5,12 @@ import {
 } from "@nestjs/common";
 import { BroadcastStatus, NotificationBroadcast, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { CustomerNotificationService } from "./customer-notification.service";
 import { BroadcastSendStats, FcmService } from "./fcm.service";
+
+/// Push data key/value identifying an admin broadcast, so a tapped push can
+/// mark the matching inbox entry as read.
+export const BROADCAST_PUSH_TYPE = "broadcast";
 
 export interface BroadcastRequest {
   title: string;
@@ -29,6 +34,7 @@ export class NotificationBroadcastService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fcm: FcmService,
+    private readonly inbox: CustomerNotificationService,
   ) {}
 
   async send(
@@ -73,11 +79,31 @@ export class NotificationBroadcastService {
       throw error;
     }
 
+    // The inbox comes first: every intended customer (with or without a push
+    // token) can read the notification in the app even if push fails.
+    try {
+      await this.inbox.deliverBroadcast(record);
+    } catch (error) {
+      this.logger.warn(
+        `Broadcast ${record.id} inbox delivery failed: ${error instanceof Error ? error.name : "unknown"}`,
+      );
+      return this.complete(record.id, {
+        status: BroadcastStatus.FAILED,
+        recipientCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+        staleTokensRemoved: 0,
+        errorMessage:
+          "Saving the notification to customer inboxes failed; nothing was sent.",
+      });
+    }
+
     let stats: BroadcastSendStats;
     try {
       stats = await this.fcm.sendToAllCustomers({
         title: request.title,
         body: request.body,
+        data: { type: BROADCAST_PUSH_TYPE, broadcastId: record.id },
       });
     } catch (error) {
       // Only the error class is logged: messages could echo request data.

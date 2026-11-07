@@ -3,6 +3,7 @@ library;
 export 'src/commission.dart';
 export 'src/brand.dart';
 export 'src/config/yalla_cash_environment.dart';
+export 'src/customer_notifications.dart';
 export 'src/core/failure.dart';
 export 'src/data/auth_token_store.dart';
 export 'src/data/in_memory_yalla_cash_repository.dart';

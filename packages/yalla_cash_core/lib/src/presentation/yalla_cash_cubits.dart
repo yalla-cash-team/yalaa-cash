@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:yalla_cash_core/src/core/failure.dart';
+import 'package:yalla_cash_core/src/customer_notifications.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/models.dart';
 import 'package:yalla_cash_core/src/store_offers.dart';
@@ -155,6 +156,10 @@ class CustomerAppState extends Equatable {
     this.banners = const [],
     this.failure,
     this.storeOffers = const {},
+    this.notifications = const [],
+    this.unreadNotificationCount = 0,
+    this.notificationsStatus = LoadStatus.initial,
+    this.notificationsFailure,
   });
 
   final LoadStatus status;
@@ -181,6 +186,17 @@ class CustomerAppState extends Equatable {
   /// [CustomerAppCubit.loadStoreOffers]. Read them with [offersFor].
   final Map<String, StoreOffersState> storeOffers;
 
+  /// The customer's UNREAD notifications, newest first. An opened
+  /// notification leaves this list immediately.
+  final List<CustomerNotification> notifications;
+
+  /// Unread notifications in the whole inbox (drives the bell indicator).
+  final int unreadNotificationCount;
+
+  /// Inbox loading, independent of [status].
+  final LoadStatus notificationsStatus;
+  final YallaCashFailure? notificationsFailure;
+
   bool get isAuthenticated => session?.role == YallaUserRole.customer;
 
   StoreOffersState offersFor(String storeId) =>
@@ -200,6 +216,10 @@ class CustomerAppState extends Equatable {
     List<Banner>? banners,
     Object? failure = _unset,
     Map<String, StoreOffersState>? storeOffers,
+    List<CustomerNotification>? notifications,
+    int? unreadNotificationCount,
+    LoadStatus? notificationsStatus,
+    Object? notificationsFailure = _unset,
   }) =>
       CustomerAppState(
         status: status ?? this.status,
@@ -222,6 +242,13 @@ class CustomerAppState extends Equatable {
             ? this.failure
             : failure as YallaCashFailure?,
         storeOffers: storeOffers ?? this.storeOffers,
+        notifications: notifications ?? this.notifications,
+        unreadNotificationCount:
+            unreadNotificationCount ?? this.unreadNotificationCount,
+        notificationsStatus: notificationsStatus ?? this.notificationsStatus,
+        notificationsFailure: identical(notificationsFailure, _unset)
+            ? this.notificationsFailure
+            : notificationsFailure as YallaCashFailure?,
       );
 
   @override
@@ -239,6 +266,10 @@ class CustomerAppState extends Equatable {
         banners,
         failure,
         storeOffers,
+        notifications,
+        unreadNotificationCount,
+        notificationsStatus,
+        notificationsFailure,
       ];
 }
 
@@ -322,6 +353,7 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
         debugPrint('CUSTOMER_STARTUP secondary_data_kicked_off');
       }
       unawaited(_loadSecondaryStartupData());
+      unawaited(loadNotifications());
     } on YallaCashFailure catch (failure) {
       if (failure.statusCode == 401 || failure.code == 'unauthorized') {
         // Invalid/expired session -> clean logout state (intentional).
@@ -411,6 +443,129 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
         ),
       );
     });
+    // The inbox has its own status, so it never fails or delays a refresh.
+    if (state.customer != null) unawaited(loadNotifications());
+  }
+
+  // ---- Notification inbox ----
+
+  /// Latest inbox request; older responses are dropped.
+  var _notificationsRequest = 0;
+
+  /// Bumped on logout so late results from the old session are dropped.
+  var _notificationsEpoch = 0;
+
+  /// Notifications being marked read: a reload in the meantime must not
+  /// bring them back into the unread list.
+  final Set<String> _readingNotifications = {};
+
+  /// Loads the unread notifications and the unread count. Independent of the
+  /// global status, and it NEVER marks anything as read.
+  Future<void> loadNotifications() async {
+    final request = ++_notificationsRequest;
+    emit(state.copyWith(
+      notificationsStatus: LoadStatus.loading,
+      notificationsFailure: null,
+    ));
+    try {
+      final inbox = await _repository.listCustomerNotifications();
+      if (isClosed || request != _notificationsRequest) return;
+      final opening = inbox.items
+          .where((n) => !n.isRead && _readingNotifications.contains(n.id))
+          .length;
+      final unread = List<CustomerNotification>.unmodifiable([
+        for (final n in inbox.items)
+          if (!n.isRead && !_readingNotifications.contains(n.id)) n,
+      ]);
+      final count = inbox.unreadCount - opening;
+      emit(state.copyWith(
+        notifications: unread,
+        unreadNotificationCount: count < 0 ? 0 : count,
+        notificationsStatus:
+            unread.isEmpty ? LoadStatus.empty : LoadStatus.success,
+        notificationsFailure: null,
+      ));
+    } on Object catch (error, stackTrace) {
+      if (isClosed || request != _notificationsRequest) return;
+      emit(state.copyWith(
+        notificationsStatus: LoadStatus.failure,
+        notificationsFailure: _asFailure(error, stackTrace),
+      ));
+    }
+  }
+
+  /// Opens one notification: it leaves the unread list and the indicator
+  /// count immediately, then exactly that one is marked read on the backend.
+  /// If the backend refuses, it is put back so the state never claims a read
+  /// the server did not record. Returns true once the backend confirmed.
+  Future<bool> openNotification(CustomerNotification notification) async {
+    if (notification.isRead) return true;
+    if (!_readingNotifications.add(notification.id)) return true;
+    final epoch = _notificationsEpoch;
+    final remaining = List<CustomerNotification>.unmodifiable(
+      state.notifications.where((n) => n.id != notification.id),
+    );
+    final before = state.unreadNotificationCount;
+    emit(state.copyWith(
+      notifications: remaining,
+      unreadNotificationCount: before > 0 ? before - 1 : 0,
+      notificationsStatus: remaining.isEmpty &&
+              state.notificationsStatus == LoadStatus.success
+          ? LoadStatus.empty
+          : null,
+    ));
+    try {
+      final result =
+          await _repository.markCustomerNotificationRead(notification.id);
+      if (!isClosed && epoch == _notificationsEpoch) {
+        emit(state.copyWith(unreadNotificationCount: result.unreadCount));
+      }
+      return true;
+    } on Object {
+      if (!isClosed && epoch == _notificationsEpoch) {
+        final restored = [
+          ...state.notifications.where((n) => n.id != notification.id),
+          notification,
+        ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        emit(state.copyWith(
+          notifications: List.unmodifiable(restored),
+          unreadNotificationCount: state.unreadNotificationCount + 1,
+          notificationsStatus: LoadStatus.success,
+        ));
+      }
+      return false;
+    } finally {
+      _readingNotifications.remove(notification.id);
+    }
+  }
+
+  /// A push notification the customer tapped on the phone: finds its inbox
+  /// entry by [broadcastId] (loading the inbox if needed), marks it read and
+  /// returns it for display. An entry that is already read is returned as
+  /// is. Null when it cannot be found (for example, offline).
+  Future<CustomerNotification?> openNotificationFromPush(
+    String broadcastId,
+  ) async {
+    CustomerNotification? find() => state.notifications
+        .where((n) => n.broadcastId == broadcastId)
+        .firstOrNull;
+    var match = find();
+    if (match == null) {
+      await loadNotifications();
+      match = find();
+    }
+    if (match != null) {
+      await openNotification(match);
+      return match;
+    }
+    try {
+      final all = await _repository.listCustomerNotifications(
+        unreadOnly: false,
+      );
+      return all.items.where((n) => n.broadcastId == broadcastId).firstOrNull;
+    } on Object {
+      return null;
+    }
   }
 
   /// Best-effort: a failed device-token registration must never disrupt the
@@ -488,6 +643,8 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     }
     await _repository.logout();
     _offersLoader.reset();
+    _notificationsEpoch += 1;
+    _notificationsRequest += 1;
     emit(const CustomerAppState());
   }
 

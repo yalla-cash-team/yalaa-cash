@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:yalla_cash_customer/src/push_notifications.dart';
 import 'package:yalla_cash_customer/src/ui/customer_theme.dart';
 import 'package:yalla_cash_customer/src/ui/logo_trim.dart';
+import 'package:yalla_cash_customer/src/ui/notifications_inbox.dart';
 import 'package:yalla_cash_customer/src/ui/components.dart';
 import 'package:yalla_cash_customer/src/ui/shell.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
@@ -48,6 +49,7 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
   final CustomerPushNotifications _push = CustomerPushNotifications();
   final GlobalKey<ScaffoldMessengerState> _messengerKey =
       GlobalKey<ScaffoldMessengerState>();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<CustomerAppState>? _customerSubscription;
   bool _pushActive = false;
 
@@ -90,6 +92,7 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
       unawaited(_push.start(
         register: customerCubit.registerDeviceToken,
         onForegroundMessage: _showForegroundMessage,
+        onOpenedMessage: _openFromPush,
       ));
     } else if (!signedIn && _pushActive) {
       _pushActive = false;
@@ -100,12 +103,30 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
   // Android does not display notifications while the app is open, so they
   // are shown here as a snackbar.
   void _showForegroundMessage(RemoteMessage message) {
+    // A new admin broadcast is already in the inbox: refresh the bell.
+    if (broadcastIdFromPushData(message.data) != null) {
+      unawaited(customerCubit.loadNotifications());
+    }
     final text = [message.notification?.title, message.notification?.body]
         .whereType<String>()
         .where((part) => part.isNotEmpty)
         .join('\n');
     if (text.isEmpty) return;
     _messengerKey.currentState?.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// A push the customer tapped on the phone: open its content and mark that
+  /// inbox entry read, so the in-app inbox stays in sync.
+  Future<void> _openFromPush(RemoteMessage message) async {
+    final broadcastId = broadcastIdFromPushData(message.data);
+    if (broadcastId == null) return;
+    final notification =
+        await customerCubit.openNotificationFromPush(broadcastId);
+    if (notification == null || !mounted) return;
+    await _navigatorKey.currentState?.push(MaterialPageRoute<void>(
+      builder: (_) =>
+          CustomerNotificationDetailPage(notification: notification),
+    ));
   }
 
   @override
@@ -133,6 +154,7 @@ class _YallaCashCustomerAppState extends State<YallaCashCustomerApp>
           debugShowCheckedModeBanner: false,
           title: 'يلا كاش',
           scaffoldMessengerKey: _messengerKey,
+          navigatorKey: _navigatorKey,
           theme: buildCustomerTheme(Brightness.light),
           darkTheme: buildCustomerTheme(Brightness.dark),
           themeMode: themeMode,
@@ -1044,6 +1066,12 @@ class _CustomerShellState extends State<CustomerShell> {
         firstName: customer.name.split(' ').first,
         // The greeting row belongs to the Home tab only.
         showGreeting: selectedIndex == 0,
+        unreadNotifications: widget.state.unreadNotificationCount,
+        onOpenNotifications: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => CustomerNotificationsPage(cubit: widget.cubit),
+          ),
+        ),
       ),
       drawer: CustomerDrawer(
         governorateName: customer.governorate,

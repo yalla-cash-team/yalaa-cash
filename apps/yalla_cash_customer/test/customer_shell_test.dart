@@ -5,6 +5,7 @@ import 'package:yalla_cash_core/yalla_cash_core.dart';
 import 'package:yalla_cash_customer/src/customer_app.dart';
 import 'package:yalla_cash_customer/src/ui/components.dart';
 import 'package:yalla_cash_customer/src/ui/customer_theme.dart';
+import 'package:yalla_cash_customer/src/ui/notifications_inbox.dart';
 import 'package:yalla_cash_customer/src/ui/shell.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
 
@@ -53,11 +54,13 @@ class _Harness extends StatefulWidget {
     this.name = 'أحمد',
     this.darkMode = false,
     this.calls,
+    this.unread = 0,
   });
 
   final String name;
   final bool darkMode;
   final List<String>? calls;
+  final int unread;
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -65,12 +68,28 @@ class _Harness extends StatefulWidget {
 
 class _HarnessState extends State<_Harness> {
   int index = 0;
+  final cubit = CustomerAppCubit(
+      InMemoryYallaCashRepository(YallaCashStore.demo()..loginDemoCustomer()));
+
+  @override
+  void dispose() {
+    cubit.close();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     void log(String s) => widget.calls?.add(s);
     return Scaffold(
-      appBar: CustomerAppBar(firstName: widget.name),
+      appBar: CustomerAppBar(
+        firstName: widget.name,
+        unreadNotifications: widget.unread,
+        onOpenNotifications: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => CustomerNotificationsPage(cubit: cubit),
+          ),
+        ),
+      ),
       drawer: CustomerDrawer(
         governorateName: 'نينوى',
         darkMode: widget.darkMode,
@@ -251,7 +270,8 @@ void main() {
   });
 
   group('notification bell', () {
-    testWidgets('no unread indicator is ever shown', (tester) async {
+    testWidgets('no unread indicator without unread notifications',
+        (tester) async {
       await tester.pumpWidget(_app(const _Harness()));
       expect(
         find.descendant(of: find.byType(AppBar), matching: find.byType(Badge)),
@@ -268,18 +288,29 @@ void main() {
       );
     });
 
+    testWidgets('a subtle dot (no number) only when unread exist',
+        (tester) async {
+      await tester.pumpWidget(_app(const _Harness(unread: 3)));
+      expect(find.byKey(const Key('notifications-unread-dot')), findsOneWidget);
+      expect(find.byTooltip('الإشعارات، 3 غير مقروءة'), findsOneWidget);
+      expect(
+        find.descendant(
+            of: find.byKey(const Key('notifications-unread-dot')),
+            matching: find.text('3')),
+        findsNothing,
+      );
+    });
+
     for (final b in Brightness.values) {
       testWidgets(
-          '$b: the bell opens an honest notifications screen and '
-          'back returns', (tester) async {
+          '$b: the bell opens the real inbox (empty, no fabricated items) '
+          'and back returns', (tester) async {
         await tester.pumpWidget(_app(const _Harness(), brightness: b));
         await tester.tap(find.byTooltip('الإشعارات'));
         await tester.pumpAndSettle();
         expect(find.byType(CustomerNotificationsPage), findsOneWidget);
         expect(find.text('الإشعارات'), findsOneWidget);
-        expect(find.text('سجل الإشعارات غير متاح بعد'), findsOneWidget);
-        expect(find.textContaining('غير متاح حالياً'), findsOneWidget);
-        // Never fabricated notifications.
+        expect(find.text('لا توجد إشعارات جديدة'), findsOneWidget);
         expect(find.byType(ListTile), findsNothing);
         expect(tester.takeException(), isNull);
         await tester.pageBack();
@@ -295,7 +326,7 @@ void main() {
       await tester.tap(find.byTooltip('الإشعارات'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      expect(find.text('سجل الإشعارات غير متاح بعد'), findsOneWidget);
+      expect(find.text('لا توجد إشعارات جديدة'), findsOneWidget);
     });
   });
 

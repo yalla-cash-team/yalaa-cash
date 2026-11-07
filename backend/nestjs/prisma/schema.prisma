@@ -84,6 +84,7 @@ model User {
   otpChallenges   OtpChallenge[]
   refreshTokens   RefreshToken[]
   deviceTokens    DeviceToken[]
+  notifications   CustomerNotification[]
 
   @@unique([oauthProvider, oauthSubject])
   @@index([role])
@@ -123,9 +124,32 @@ model NotificationBroadcast {
   createdByUserId    String          @db.Uuid
   createdAt          DateTime        @default(now())
   completedAt        DateTime?
+  inboxEntries       CustomerNotification[]
 
   @@index([status, createdAt])
   @@index([createdAt])
+}
+
+/// One customer's copy of a notification: the in-app inbox. Written for every
+/// intended customer (with or without a push token) before the push is sent,
+/// so it is visible even when push delivery fails. Each customer can only read
+/// and mark their own rows. readAt is set only when the customer opens that
+/// one notification.
+model CustomerNotification {
+  id          String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String                 @db.Uuid
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The admin broadcast this came from; one inbox row per customer per
+  /// broadcast (unique), so retries never duplicate it.
+  broadcastId String?                @db.Uuid
+  broadcast   NotificationBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
+  title       String
+  body        String
+  createdAt   DateTime               @default(now())
+  readAt      DateTime?
+
+  @@unique([broadcastId, userId])
+  @@index([userId, readAt, createdAt])
 }
 
 model CustomerProfile {

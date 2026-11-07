@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:yalla_cash_core/src/core/failure.dart';
+import 'package:yalla_cash_core/src/customer_notifications.dart';
 import 'package:yalla_cash_core/src/data/yalla_cash_api_client.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/models.dart';
@@ -860,6 +861,42 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   @override
   Future<Banner> removeBannerImage(String bannerId) async => _bannerFromApi(
       apiMap(await _client.delete('/admin/banners/$bannerId/image')));
+
+  // ---- Customer notification inbox ----
+
+  @override
+  Future<CustomerNotificationInbox> listCustomerNotifications({
+    bool unreadOnly = true,
+  }) async {
+    final json = apiMap(await _client.get(
+      '/customer/notifications',
+      query: {'unread': unreadOnly ? 'true' : 'false'},
+    ));
+    final items = json['items'];
+    if (items is! List) {
+      throw const YallaCashFailure(
+        code: 'invalid_response',
+        message: 'استجابة الخادم لا تحتوي على قائمة صالحة.',
+      );
+    }
+    return CustomerNotificationInbox(
+      items: [for (final item in items) CustomerNotification.fromJson(apiMap(item))],
+      unreadCount: _int(json['unreadCount'] ?? 0),
+    );
+  }
+
+  @override
+  Future<CustomerNotificationReadResult> markCustomerNotificationRead(
+    String notificationId,
+  ) async {
+    final json = apiMap(await _client.post(
+      '/customer/notifications/${Uri.encodeComponent(notificationId)}/read',
+    ));
+    return CustomerNotificationReadResult(
+      notification: CustomerNotification.fromJson(json),
+      unreadCount: _int(json['unreadCount'] ?? 0),
+    );
+  }
 
   // ---- Store offers. The endpoints return bare JSON arrays/objects. ----
 
