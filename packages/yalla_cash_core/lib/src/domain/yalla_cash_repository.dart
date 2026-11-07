@@ -1,5 +1,6 @@
 import 'package:yalla_cash_core/src/data/auth_token_store.dart';
 import 'package:yalla_cash_core/src/models.dart';
+import 'package:yalla_cash_core/src/store_offers.dart';
 
 enum YallaUserRole { customer, merchant, admin }
 
@@ -299,4 +300,37 @@ abstract class YallaCashRepository {
   Future<MonthlySettlementPreview> previewMonthlySettlement(String month);
   Future<MonthlySettlementRunResult> runMonthlySettlement(String month);
   Future<List<MonthlySettlementRecord>> listMonthlySettlementHistory();
+
+  // ---- Store offers (view-only; see docs/STORE_OFFERS_API.md) ----
+
+  /// Offers customers can see now for [storeId], in display order (public,
+  /// no sign-in needed). Fails with a 404 [YallaCashFailure] when the store
+  /// is missing or inactive; an active store without offers gives `[]`.
+  Future<List<StoreOffer>> listStoreOffers(String storeId);
+
+  /// Admin: every offer of [storeId], including inactive, scheduled and
+  /// expired ones, in display order.
+  Future<List<StoreOffer>> listAdminStoreOffers(String storeId);
+  Future<StoreOffer> createOffer(String storeId, StoreOfferDraft draft);
+
+  /// Partial update: only the fields set in [update] change.
+  Future<StoreOffer> updateOffer(String offerId, StoreOfferUpdate update);
+
+  /// Deletes exactly this one offer (and its image).
+  Future<void> deleteOffer(String offerId);
+
+  /// PNG, JPEG or WebP, at most 300 KB. Bumps the offer's imageVersion.
+  Future<StoreOffer> setOfferImage(String offerId, StoreLogoUpload image);
+
+  /// Bumps the offer's imageVersion.
+  Future<StoreOffer> removeOfferImage(String offerId);
+
+  /// Admin preview bytes of an offer's image, for an offer in any status.
+  /// It needs the admin token, so never load that URL as a plain network
+  /// image. Pass the offer's [imageVersion] so a re-uploaded image is never
+  /// served from a stale HTTP cache.
+  Future<OfferImageData> fetchAdminOfferImage(
+    String offerId, {
+    int? imageVersion,
+  });
 }

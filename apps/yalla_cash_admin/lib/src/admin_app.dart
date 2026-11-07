@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart' hide Banner;
+import 'package:yalla_cash_admin/src/store_offers_admin.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart' as core show Banner;
 
 const _adminPointAdjustmentNote = 'Admin adjustment';
@@ -2076,6 +2077,14 @@ class _StoreAdminCardState extends State<_StoreAdminCard> {
               Text(widget.partner.location,
                   style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonalIcon(
+                    onPressed: _deleting ? null : () => _openOffers(context),
+                    icon: const Icon(Icons.local_offer_outlined),
+                    label: const Text('العروض')),
+              ),
+              const SizedBox(height: 8),
               Row(children: [
                 Expanded(
                     child: OutlinedButton.icon(
@@ -2100,6 +2109,16 @@ class _StoreAdminCardState extends State<_StoreAdminCard> {
                                 color: Theme.of(context).colorScheme.error)))),
               ]),
             ],
+          ),
+        ),
+      );
+
+  void _openOffers(BuildContext context) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => StoreOffersAdminPage(
+            cubit: widget.cubit,
+            repository: widget.repository,
+            store: widget.partner,
           ),
         ),
       );

@@ -1,8 +1,10 @@
 import 'dart:convert';
 
+import 'package:yalla_cash_core/src/core/failure.dart';
 import 'package:yalla_cash_core/src/data/yalla_cash_api_client.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/models.dart';
+import 'package:yalla_cash_core/src/store_offers.dart';
 
 class RemoteYallaCashRepository implements YallaCashRepository {
   RemoteYallaCashRepository(this._client);
@@ -858,6 +860,94 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   @override
   Future<Banner> removeBannerImage(String bannerId) async => _bannerFromApi(
       apiMap(await _client.delete('/admin/banners/$bannerId/image')));
+
+  // ---- Store offers. The endpoints return bare JSON arrays/objects. ----
+
+  // Public endpoint: sent without the bearer token. Offers parsed from it
+  // point at the public image endpoint.
+  @override
+  Future<List<StoreOffer>> listStoreOffers(String storeId) async =>
+      storeOffersFromJson(
+        await _client.get(
+          '/stores/${Uri.encodeComponent(storeId)}/offers',
+          authenticated: false,
+        ),
+        resolveUrl: _resolveOfferUrl,
+      );
+
+  @override
+  Future<List<StoreOffer>> listAdminStoreOffers(String storeId) async =>
+      storeOffersFromJson(
+        await _client.get('/admin/stores/${Uri.encodeComponent(storeId)}/offers'),
+        resolveUrl: _resolveOfferUrl,
+        imageAccess: OfferImageAccess.adminPreview,
+      );
+
+  @override
+  Future<StoreOffer> createOffer(String storeId, StoreOfferDraft draft) async =>
+      _adminOfferFromApi(await _client.post(
+        '/admin/stores/${Uri.encodeComponent(storeId)}/offers',
+        body: draft.toJson(),
+      ));
+
+  @override
+  Future<StoreOffer> updateOffer(
+          String offerId, StoreOfferUpdate update) async =>
+      _adminOfferFromApi(await _client.patch(
+        '/admin/offers/${Uri.encodeComponent(offerId)}',
+        body: update.toJson(),
+      ));
+
+  @override
+  Future<void> deleteOffer(String offerId) async {
+    await _client.delete('/admin/offers/${Uri.encodeComponent(offerId)}');
+  }
+
+  // POST (not PUT, unlike store logos), as defined by the offers API.
+  @override
+  Future<StoreOffer> setOfferImage(
+          String offerId, StoreLogoUpload image) async =>
+      _adminOfferFromApi(await _client.post(
+        '/admin/offers/${Uri.encodeComponent(offerId)}/image',
+        body: {
+          'contentType': image.contentType,
+          'dataBase64': base64Encode(image.bytes),
+        },
+      ));
+
+  @override
+  Future<StoreOffer> removeOfferImage(String offerId) async =>
+      _adminOfferFromApi(await _client
+          .delete('/admin/offers/${Uri.encodeComponent(offerId)}/image'));
+
+  @override
+  Future<OfferImageData> fetchAdminOfferImage(
+    String offerId, {
+    int? imageVersion,
+  }) async {
+    final response = await _client.getBytes(
+      '/admin/offers/${Uri.encodeComponent(offerId)}/image',
+      query: {'v': imageVersion},
+    );
+    final contentType = response.contentType;
+    if (contentType == null || !offerImageContentTypes.contains(contentType)) {
+      throw YallaCashFailure(
+        code: 'invalid_response',
+        message: 'استجابة الخادم غير متوقعة.',
+        details: 'offer image content-type: $contentType',
+      );
+    }
+    return OfferImageData(bytes: response.bytes, contentType: contentType);
+  }
+
+  StoreOffer _adminOfferFromApi(Object? response) => StoreOffer.fromJson(
+        apiMap(response),
+        resolveUrl: _resolveOfferUrl,
+        imageAccess: OfferImageAccess.adminPreview,
+      );
+
+  /// Keeps the `?v=<imageVersion>` cache-buster of server-relative URLs.
+  String _resolveOfferUrl(String path) => _client.resolveUrl(path).toString();
 
   Banner _bannerFromApi(Map<String, Object?> json) => Banner(
         id: json['id']! as String,

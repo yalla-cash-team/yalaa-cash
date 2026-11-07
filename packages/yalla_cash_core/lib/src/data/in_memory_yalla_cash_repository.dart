@@ -1,13 +1,25 @@
+import 'dart:typed_data';
+
 import 'package:yalla_cash_core/src/data/auth_token_store.dart';
 import 'package:yalla_cash_core/src/core/failure.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/in_memory_store.dart';
 import 'package:yalla_cash_core/src/models.dart';
+import 'package:yalla_cash_core/src/store_offers.dart';
 
 class InMemoryYallaCashRepository implements YallaCashRepository {
-  InMemoryYallaCashRepository(this._store);
+  /// [clock] is the time source for offer availability and timestamps;
+  /// tests inject a fixed clock for deterministic boundaries.
+  InMemoryYallaCashRepository(this._store, {DateTime Function()? clock})
+      : _clock = clock ?? DateTime.now;
 
   final YallaCashStore _store;
+  final DateTime Function() _clock;
+
+  /// Offers live only in this repository instance and start empty: no demo
+  /// offers are fabricated. Insertion-ordered.
+  final Map<String, _MemoryOffer> _offers = {};
+  var _offerSequence = 0;
 
   @override
   Future<bool> hasSavedSession() async => _store.currentCustomer != null;
@@ -649,5 +661,321 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
         accessToken: 'demo-access-token',
         refreshToken: 'demo-refresh-token',
         expiresAt: DateTime.now().add(const Duration(days: 1)),
+      );
+
+  // ---- Store offers: mirrors the backend rules in docs/STORE_OFFERS_API.md.
+
+  @override
+  Future<List<StoreOffer>> listStoreOffers(String storeId) async {
+    final store = _store.stores.where((s) => s.id == storeId).firstOrNull;
+    if (store == null || !store.isActive) throw _storeNotFound();
+    final now = _clock();
+    return [
+      for (final offer in _orderedOffersOf(storeId))
+        if (offer.statusAt(now) == OfferStatus.active) offer.publicView(),
+    ];
+  }
+
+  @override
+  Future<List<StoreOffer>> listAdminStoreOffers(String storeId) async {
+    _requireStore(storeId);
+    final now = _clock();
+    return [
+      for (final offer in _orderedOffersOf(storeId)) offer.adminView(now),
+    ];
+  }
+
+  @override
+  Future<StoreOffer> createOffer(String storeId, StoreOfferDraft draft) async {
+    _requireStore(storeId);
+    final title = _validTitle(draft.title);
+    final description = _validDescription(draft.description);
+    final label = _validLabel(draft.discountLabel);
+    final window = _validWindow(draft.startDate, draft.endDate);
+    final displayOrder = _validDisplayOrder(draft.displayOrder);
+    final now = _clock();
+    final sequence = ++_offerSequence;
+    final offer = _MemoryOffer(
+      id: 'offer-$sequence',
+      storeId: storeId,
+      sequence: sequence,
+      createdAt: now.toUtc(),
+      title: title,
+      description: description,
+      discountLabel: label,
+      startDate: window.$1,
+      endDate: window.$2,
+      isActive: draft.isActive,
+      displayOrder: displayOrder,
+    );
+    _offers[offer.id] = offer;
+    return offer.adminView(now);
+  }
+
+  @override
+  Future<StoreOffer> updateOffer(
+      String offerId, StoreOfferUpdate update) async {
+    final offer = _requireOffer(offerId);
+    final now = _clock();
+    if (update.isEmpty) return offer.adminView(now);
+
+    // Validate everything first so a rejected update changes nothing.
+    final title = update.title == null ? null : _validTitle(update.title!);
+    final description = update.description == null
+        ? null
+        : _validDescription(update.description!.value ?? '');
+    final label = update.discountLabel == null
+        ? null
+        : _validLabel(update.discountLabel!.value);
+    // The final combined window is validated, as on the backend.
+    final window = _validWindow(
+      update.startDate == null ? offer.startDate : update.startDate!.value,
+      update.endDate == null ? offer.endDate : update.endDate!.value,
+    );
+    final displayOrder = update.displayOrder == null
+        ? null
+        : _validDisplayOrder(update.displayOrder!);
+
+    if (title != null) offer.title = title;
+    if (description != null) offer.description = description;
+    if (update.discountLabel != null) offer.discountLabel = label;
+    offer
+      ..startDate = window.$1
+      ..endDate = window.$2;
+    if (update.isActive != null) offer.isActive = update.isActive!;
+    if (displayOrder != null) offer.displayOrder = displayOrder;
+    offer.updatedAt = now.toUtc();
+    return offer.adminView(now);
+  }
+
+  @override
+  Future<void> deleteOffer(String offerId) async {
+    _requireOffer(offerId);
+    _offers.remove(offerId);
+  }
+
+  @override
+  Future<StoreOffer> setOfferImage(
+      String offerId, StoreLogoUpload image) async {
+    // Like the backend: the image is validated before the offer is touched.
+    if (!offerImageContentTypes.contains(image.contentType)) {
+      throw _invalidOffer('contentType');
+    }
+    if (image.bytes.isEmpty || image.bytes.length > _maxOfferImageBytes) {
+      throw _invalidOffer('image size');
+    }
+    final offer = _requireOffer(offerId);
+    final now = _clock();
+    offer
+      ..image = OfferImageData(
+        bytes: Uint8List.fromList(image.bytes),
+        contentType: image.contentType,
+      )
+      ..imageVersion += 1
+      ..updatedAt = now.toUtc();
+    return offer.adminView(now);
+  }
+
+  @override
+  Future<StoreOffer> removeOfferImage(String offerId) async {
+    final offer = _requireOffer(offerId);
+    final now = _clock();
+    offer
+      ..image = null
+      ..imageVersion += 1
+      ..updatedAt = now.toUtc();
+    return offer.adminView(now);
+  }
+
+  @override
+  Future<OfferImageData> fetchAdminOfferImage(
+    String offerId, {
+    int? imageVersion,
+  }) async {
+    final image = _requireOffer(offerId).image;
+    if (image == null) {
+      throw const YallaCashFailure(
+        statusCode: 404,
+        code: 'not_found',
+        message: 'صورة العرض غير موجودة.',
+      );
+    }
+    return image;
+  }
+
+  /// displayOrder ascending, then newest first (the backend's OFFER_ORDER);
+  /// the creation sequence breaks ties between equal timestamps.
+  List<_MemoryOffer> _orderedOffersOf(String storeId) =>
+      _offers.values.where((offer) => offer.storeId == storeId).toList()
+        ..sort((a, b) {
+          final byOrder = a.displayOrder.compareTo(b.displayOrder);
+          if (byOrder != 0) return byOrder;
+          final byCreated = b.createdAt.compareTo(a.createdAt);
+          if (byCreated != 0) return byCreated;
+          return b.sequence.compareTo(a.sequence);
+        });
+
+  /// Admin endpoints accept inactive (soft-deleted) stores too.
+  void _requireStore(String storeId) {
+    if (!_store.stores.any((store) => store.id == storeId)) {
+      throw _storeNotFound();
+    }
+  }
+
+  _MemoryOffer _requireOffer(String offerId) =>
+      _offers[offerId] ??
+      (throw const YallaCashFailure(
+        statusCode: 404,
+        code: 'not_found',
+        message: 'العرض غير موجود.',
+      ));
+}
+
+const _maxOfferImageBytes = 300 * 1024;
+
+YallaCashFailure _storeNotFound() => const YallaCashFailure(
+      statusCode: 404,
+      code: 'not_found',
+      message: 'المتجر غير موجود.',
+    );
+
+YallaCashFailure _invalidOffer(String field) => YallaCashFailure(
+      statusCode: 400,
+      code: 'bad_request',
+      message: 'بيانات العرض غير صالحة.',
+      details: field,
+    );
+
+String _validTitle(String value) {
+  final title = value.trim();
+  if (title.length < 2 || title.length > 120) throw _invalidOffer('title');
+  return title;
+}
+
+String _validDescription(String value) {
+  if (value.length > 1000) throw _invalidOffer('description');
+  return value;
+}
+
+/// Blank or null means "no label".
+String? _validLabel(String? value) {
+  final label = value?.trim();
+  if (label == null || label.isEmpty) return null;
+  if (label.length > 60) throw _invalidOffer('discountLabel');
+  return label;
+}
+
+int _validDisplayOrder(int value) {
+  if (value < 0 || value > 9999) throw _invalidOffer('displayOrder');
+  return value;
+}
+
+(OfferCalendarDate?, OfferCalendarDate?) _validWindow(
+  OfferCalendarDate? start,
+  OfferCalendarDate? end,
+) {
+  for (final date in [start, end]) {
+    if (date != null && (date.year < 2000 || date.year > 2100)) {
+      throw _invalidOffer('date year');
+    }
+  }
+  if (start != null && end != null && end.compareTo(start) < 0) {
+    throw _invalidOffer('endDate before startDate');
+  }
+  return (start, end);
+}
+
+/// IN-MEMORY APPROXIMATION ONLY. The backend converts Damascus calendar days
+/// with the time zone database. This demo/test double uses Syria's fixed
+/// UTC+3 (in force since October 2022) so that it can produce startsAt and
+/// endsBefore without a time zone dependency.
+const _damascusUtcOffset = Duration(hours: 3);
+
+DateTime _damascusStartOf(OfferCalendarDate day) =>
+    DateTime.utc(day.year, day.month, day.day).subtract(_damascusUtcOffset);
+
+class _MemoryOffer {
+  _MemoryOffer({
+    required this.id,
+    required this.storeId,
+    required this.sequence,
+    required this.createdAt,
+    required this.title,
+    required this.description,
+    required this.discountLabel,
+    required this.startDate,
+    required this.endDate,
+    required this.isActive,
+    required this.displayOrder,
+  }) : updatedAt = createdAt;
+
+  final String id;
+  final String storeId;
+  final int sequence;
+  final DateTime createdAt;
+  String title;
+  String description;
+  String? discountLabel;
+  OfferCalendarDate? startDate;
+  OfferCalendarDate? endDate;
+  bool isActive;
+  int displayOrder;
+  DateTime updatedAt;
+  OfferImageData? image;
+  var imageVersion = 0;
+
+  /// 00:00 Damascus on [startDate] (inclusive).
+  DateTime? get startsAt =>
+      startDate == null ? null : _damascusStartOf(startDate!);
+
+  /// 00:00 Damascus on the day after [endDate] (exclusive).
+  DateTime? get endsBefore => endDate == null
+      ? null
+      : _damascusStartOf(endDate!).add(const Duration(days: 1));
+
+  OfferStatus statusAt(DateTime now) => offerStatusAt(
+        isActive: isActive,
+        startsAt: startsAt,
+        endsBefore: endsBefore,
+        now: now,
+      );
+
+  /// The shape [StoreOffer.fromJson] gives for an admin response.
+  StoreOffer adminView(DateTime now) => StoreOffer(
+        id: id,
+        storeId: storeId,
+        title: title,
+        description: description,
+        discountLabel: discountLabel,
+        imageUrl:
+            image == null ? null : '/admin/offers/$id/image?v=$imageVersion',
+        imageVersion: imageVersion,
+        hasImage: image != null,
+        imageAccess: OfferImageAccess.adminPreview,
+        startDate: startDate,
+        endDate: endDate,
+        startsAt: startsAt,
+        endsBefore: endsBefore,
+        isActive: isActive,
+        displayOrder: displayOrder,
+        serverStatus: statusAt(now),
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+      );
+
+  /// The shape [StoreOffer.fromJson] gives for a public response (no admin
+  /// fields; the version travels only inside the image URL).
+  StoreOffer publicView() => StoreOffer(
+        id: id,
+        storeId: storeId,
+        title: title,
+        description: description,
+        discountLabel: discountLabel,
+        imageUrl: image == null ? null : '/offers/$id/image?v=$imageVersion',
+        hasImage: image != null,
+        startDate: startDate,
+        endDate: endDate,
+        startsAt: startsAt,
+        endsBefore: endsBefore,
       );
 }

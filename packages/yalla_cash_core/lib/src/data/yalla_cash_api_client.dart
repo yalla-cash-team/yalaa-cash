@@ -90,6 +90,34 @@ class YallaCashApiClient {
 
   Future<Object?> delete(String path) => _send('DELETE', path);
 
+  /// Downloads a binary resource, such as the admin offer-image preview.
+  ///
+  /// Uses the same bearer token and the same single refresh-and-retry as JSON
+  /// requests. The token is sent only in the Authorization header, never in
+  /// the URL. The bytes go back to the caller and are not written to disk.
+  /// Non-2xx responses throw a [YallaCashFailure], just like JSON requests.
+  Future<ApiBinaryResponse> getBytes(
+    String path, {
+    Map<String, Object?>? query,
+    bool authenticated = true,
+  }) async {
+    final response = await _execute(
+      'GET',
+      path,
+      query: query,
+      authenticated: authenticated,
+      binary: true,
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final contentType = response.headers['content-type'];
+      return (
+        bytes: response.bodyBytes,
+        contentType: contentType?.split(';').first.trim().toLowerCase(),
+      );
+    }
+    throw _binaryFailure(response);
+  }
+
   /// Absolute URL for a server-relative path such as `/stores/1/logo?v=2`.
   /// Full URLs (legacy product, banner or CDN links) are returned unchanged.
   Uri resolveUrl(String path) {
@@ -110,11 +138,34 @@ class YallaCashApiClient {
     Map<String, Object?>? body,
     Map<String, Object?>? query,
     bool authenticated = true,
+  }) async =>
+      _decodeResponse(await _execute(
+        method,
+        path,
+        body: body,
+        query: query,
+        authenticated: authenticated,
+      ));
+
+  /// Sends one request with auth, timeout and network-error handling, plus a
+  /// single retry after a shared token refresh on 401. Returns the raw
+  /// response; [_send] decodes JSON and [getBytes] keeps the bytes.
+  Future<http.Response> _execute(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, Object?>? query,
+    bool authenticated = true,
     bool retryOnUnauthorized = true,
+    bool binary = false,
   }) async {
     final request = http.Request(method, _uri(path, query));
-    request.headers['accept'] = 'application/json';
-    request.headers['content-type'] = 'application/json';
+    if (binary) {
+      request.headers['accept'] = '*/*';
+    } else {
+      request.headers['accept'] = 'application/json';
+      request.headers['content-type'] = 'application/json';
+    }
 
     if (authenticated) {
       final saved = await tokens;
@@ -134,17 +185,18 @@ class YallaCashApiClient {
         if (refreshed) {
           // Re-read the latest tokens: the shared refresh attempt may have
           // completed while this request was waiting on it.
-          return await _send(
+          return await _execute(
             method,
             path,
             body: body,
             query: query,
             authenticated: authenticated,
             retryOnUnauthorized: false,
+            binary: binary,
           );
         }
       }
-      return _decodeResponse(response);
+      return response;
     } on TimeoutException {
       throw const YallaCashFailure(
         code: 'request_timeout',
@@ -237,6 +289,32 @@ class YallaCashApiClient {
     );
   }
 
+  /// Error from a binary request. The body is normally the API's JSON error,
+  /// but it is decoded defensively because it is not guaranteed to be JSON.
+  YallaCashFailure _binaryFailure(http.Response response) {
+    Object? decoded;
+    try {
+      decoded = response.bodyBytes.isEmpty
+          ? null
+          : jsonDecode(utf8.decode(response.bodyBytes));
+    } on FormatException {
+      decoded = null;
+    }
+    if (decoded is Map) {
+      return YallaCashFailure(
+        statusCode: response.statusCode,
+        code: decoded['code']?.toString() ?? 'request_failed',
+        message: decoded['message']?.toString() ?? 'فشل الطلب.',
+        details: decoded['details'],
+      );
+    }
+    return YallaCashFailure(
+      statusCode: response.statusCode,
+      code: 'request_failed',
+      message: 'فشل الطلب.',
+    );
+  }
+
   Uri _uri(String path, Map<String, Object?>? query) {
     final base = _environment.apiBaseUrl;
     final basePath = base.path.endsWith('/')
@@ -253,6 +331,9 @@ class YallaCashApiClient {
     );
   }
 }
+
+/// Body and media type (lower-case, parameters removed) of a binary response.
+typedef ApiBinaryResponse = ({Uint8List bytes, String? contentType});
 
 Map<String, Object?> apiMap(Object? value) {
   if (value is Map<String, Object?>) return value;

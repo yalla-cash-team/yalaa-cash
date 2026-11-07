@@ -222,6 +222,7 @@ model Store {
   transactions     LoyaltyTransaction[]
   settlements      MerchantSettlement[]
   logo             StoreLogo?
+  offers           StoreOffer[]
 
   @@index([city, category])
   @@index([isActive])
@@ -235,6 +236,48 @@ model StoreLogo {
   contentType String
   data        Bytes
   updatedAt   DateTime @updatedAt
+}
+
+/// A view-only offer advertised by an exclusive store. Customers show the
+/// Yalla Cash app in the store to receive it: there are no codes, no QR and
+/// no points or money movement tied to an offer.
+///
+/// Availability window (UTC instants, computed from Asia/Damascus dates):
+/// * startsAt   — inclusive: 00:00 Damascus time of the first selected day.
+/// * endsBefore — EXCLUSIVE: 00:00 Damascus time of the day AFTER the last
+///                selected day, so the whole last day is included without
+///                23:59:59.999 precision edge cases.
+/// An offer is available when isActive, its store is active, and
+///   (startsAt IS NULL OR startsAt <= now) AND (endsBefore IS NULL OR now < endsBefore).
+model StoreOffer {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId       String           @db.Uuid
+  store         Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  title         String
+  description   String           @default("")
+  /// Free-text display label, e.g. "خصم 20%". Never used in any calculation.
+  discountLabel String?
+  /// Bumped on every image upload or removal; used to cache-bust image URLs.
+  imageVersion  Int              @default(0)
+  image         StoreOfferImage?
+  startsAt      DateTime?
+  endsBefore    DateTime?
+  isActive      Boolean          @default(true)
+  displayOrder  Int              @default(0)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([storeId, isActive, displayOrder])
+}
+
+/// Offer image bytes, kept out of the StoreOffer row so offer lists stay light
+/// (same storage pattern as StoreLogo, BannerImage and DigitalProductImage).
+model StoreOfferImage {
+  offerId     String     @id @db.Uuid
+  offer       StoreOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  contentType String
+  data        Bytes
+  updatedAt   DateTime   @updatedAt
 }
 
 /// One row per customer account that has claimed the share reward. The

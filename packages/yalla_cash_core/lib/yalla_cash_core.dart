@@ -12,6 +12,7 @@ export 'src/domain/yalla_cash_repository.dart';
 export 'src/in_memory_store.dart';
 export 'src/models.dart';
 export 'src/presentation/yalla_cash_cubits.dart';
+export 'src/store_offers.dart';
 export 'src/theme.dart';
 export 'src/utils.dart';
 export 'src/yalla_cash_runtime.dart';

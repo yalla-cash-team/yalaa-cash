@@ -36,3 +36,19 @@ key.properties
 *.apk
 *.aab
 *.apks
+
+# --- Release hygiene (local backups, generated builds, scratch files) ---
+# Database dumps and local backups: never commit (may contain production data).
+/backups/
+*.dump
+*.sql.gz
+# Generated release builds (rebuilt locally; e.g. Firebase hosting web output).
+/build_outputs/
+# Firebase CLI hosting cache.
+/.firebase/
+# Timestamped config backups, e.g. google-services.json.bak-pre-play-...
+*.bak-*
+# One-off patch backups at the repo root.
+/*.patch
+# Scratch test files (visual-inspection harnesses, empty editor leftovers).
+**/test/_tmp_*.dart

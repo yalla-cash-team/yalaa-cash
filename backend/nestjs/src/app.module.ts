@@ -9,6 +9,7 @@ import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
 import { CustomerModule } from "./customer/customer.module";
 import { MerchantModule } from "./merchant/merchant.module";
+import { OffersModule } from "./offers/offers.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { StoresModule } from "./stores/stores.module";
 
@@ -64,6 +65,7 @@ import { StoresModule } from "./stores/stores.module";
     CustomerModule,
     MerchantModule,
     AdminModule,
+    OffersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

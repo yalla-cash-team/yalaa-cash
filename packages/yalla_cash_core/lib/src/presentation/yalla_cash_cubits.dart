@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:yalla_cash_core/src/core/failure.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
 import 'package:yalla_cash_core/src/models.dart';
+import 'package:yalla_cash_core/src/store_offers.dart';
 
 const _unset = Object();
 
@@ -23,6 +24,122 @@ YallaCashFailure _unexpectedFailure(Object error, StackTrace stackTrace) {
   );
 }
 
+YallaCashFailure _asFailure(Object error, StackTrace stackTrace) =>
+    error is YallaCashFailure ? error : _unexpectedFailure(error, stackTrace);
+
+/// One store's offers inside a Cubit state. States are keyed by store id, so
+/// one store's offers can never appear on another store's page.
+///
+/// The statuses here are independent of the Cubit's global status: loading
+/// or changing offers never clears, blocks or fails any other data.
+class StoreOffersState extends Equatable {
+  const StoreOffersState({
+    this.status = LoadStatus.initial,
+    this.offers = const [],
+    this.failure,
+    this.operationStatus = LoadStatus.initial,
+    this.operationFailure,
+  });
+
+  /// Loading of the offer list.
+  final LoadStatus status;
+
+  /// The last successfully loaded offers, in display order. They are kept
+  /// while a reload runs and after a reload fails.
+  final List<StoreOffer> offers;
+  final YallaCashFailure? failure;
+
+  /// The latest admin create/update/delete/image operation on this store's
+  /// offers.
+  final LoadStatus operationStatus;
+  final YallaCashFailure? operationFailure;
+
+  bool get isLoading => status == LoadStatus.loading;
+  bool get isSaving => operationStatus == LoadStatus.loading;
+
+  StoreOffersState copyWith({
+    LoadStatus? status,
+    List<StoreOffer>? offers,
+    Object? failure = _unset,
+    LoadStatus? operationStatus,
+    Object? operationFailure = _unset,
+  }) =>
+      StoreOffersState(
+        status: status ?? this.status,
+        offers: offers ?? this.offers,
+        failure: identical(failure, _unset)
+            ? this.failure
+            : failure as YallaCashFailure?,
+        operationStatus: operationStatus ?? this.operationStatus,
+        operationFailure: identical(operationFailure, _unset)
+            ? this.operationFailure
+            : operationFailure as YallaCashFailure?,
+      );
+
+  @override
+  List<Object?> get props =>
+      [status, offers, failure, operationStatus, operationFailure];
+}
+
+/// Returns a new map in which only [storeId]'s entry is changed.
+Map<String, StoreOffersState> _withStoreOffers(
+  Map<String, StoreOffersState> all,
+  String storeId,
+  StoreOffersState Function(StoreOffersState current) change,
+) =>
+    Map.unmodifiable({
+      ...all,
+      storeId: change(all[storeId] ?? const StoreOffersState()),
+    });
+
+/// Loads one store's offers for a Cubit. Each request takes a unique,
+/// increasing number. Only the latest request per store may write its
+/// result, so a slow older response never replaces a newer one, and a
+/// response for store A can only ever land under store A.
+class _StoreOffersLoader {
+  var _sequence = 0;
+  final Map<String, int> _latest = {};
+
+  Future<void> load({
+    required String storeId,
+    required Future<List<StoreOffer>> Function() fetch,
+    required bool Function() isClosed,
+    required void Function(
+      StoreOffersState Function(StoreOffersState current) change,
+    ) update,
+  }) async {
+    final request = ++_sequence;
+    _latest[storeId] = request;
+    bool isCurrent() => !isClosed() && _latest[storeId] == request;
+
+    update((current) => current.copyWith(
+          status: LoadStatus.loading,
+          failure: null,
+        ));
+    try {
+      final offers = await fetch();
+      if (!isCurrent()) return;
+      final own = List<StoreOffer>.unmodifiable(
+        offers.where((offer) => offer.storeId == storeId),
+      );
+      update((current) => current.copyWith(
+            status: own.isEmpty ? LoadStatus.empty : LoadStatus.success,
+            offers: own,
+            failure: null,
+          ));
+    } on Object catch (error, stackTrace) {
+      if (!isCurrent()) return;
+      update((current) => current.copyWith(
+            status: LoadStatus.failure,
+            failure: _asFailure(error, stackTrace),
+          ));
+    }
+  }
+
+  /// Makes every in-flight request stale (used on logout).
+  void reset() => _latest.clear();
+}
+
 class CustomerAppState extends Equatable {
   const CustomerAppState({
     this.status = LoadStatus.initial,
@@ -37,6 +154,7 @@ class CustomerAppState extends Equatable {
     this.productRedemptions = const [],
     this.banners = const [],
     this.failure,
+    this.storeOffers = const {},
   });
 
   final LoadStatus status;
@@ -59,7 +177,14 @@ class CustomerAppState extends Equatable {
   final List<Banner> banners;
   final YallaCashFailure? failure;
 
+  /// View-only offers per store id, loaded on demand by
+  /// [CustomerAppCubit.loadStoreOffers]. Read them with [offersFor].
+  final Map<String, StoreOffersState> storeOffers;
+
   bool get isAuthenticated => session?.role == YallaUserRole.customer;
+
+  StoreOffersState offersFor(String storeId) =>
+      storeOffers[storeId] ?? const StoreOffersState();
 
   CustomerAppState copyWith({
     LoadStatus? status,
@@ -74,6 +199,7 @@ class CustomerAppState extends Equatable {
     List<ProductRedemption>? productRedemptions,
     List<Banner>? banners,
     Object? failure = _unset,
+    Map<String, StoreOffersState>? storeOffers,
   }) =>
       CustomerAppState(
         status: status ?? this.status,
@@ -95,6 +221,7 @@ class CustomerAppState extends Equatable {
         failure: identical(failure, _unset)
             ? this.failure
             : failure as YallaCashFailure?,
+        storeOffers: storeOffers ?? this.storeOffers,
       );
 
   @override
@@ -111,6 +238,7 @@ class CustomerAppState extends Equatable {
         productRedemptions,
         banners,
         failure,
+        storeOffers,
       ];
 }
 
@@ -130,6 +258,21 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
   }
 
   final YallaCashRepository _repository;
+
+  final _offersLoader = _StoreOffersLoader();
+
+  /// Loads the offers shown on [storeId]'s page into
+  /// [CustomerAppState.offersFor]. Only that store's entry changes: the
+  /// global status and all other customer data stay as they are. A response
+  /// that arrives after a newer request for the same store is dropped.
+  Future<void> loadStoreOffers(String storeId) => _offersLoader.load(
+        storeId: storeId,
+        fetch: () => _repository.listStoreOffers(storeId),
+        isClosed: () => isClosed,
+        update: (change) => emit(state.copyWith(
+          storeOffers: _withStoreOffers(state.storeOffers, storeId, change),
+        )),
+      );
 
   /// In-flight guard for [updateGovernorate]: prevents overlapping
   /// governorate-change operations (e.g. a rapid double-tap on two
@@ -344,6 +487,7 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
       }
     }
     await _repository.logout();
+    _offersLoader.reset();
     emit(const CustomerAppState());
   }
 
@@ -637,6 +781,7 @@ class AdminAppState extends Equatable {
     this.minCashWithdrawalSyp,
     this.shareRewardPoints,
     this.failure,
+    this.storeOffers = const {},
   });
 
   final LoadStatus status;
@@ -662,7 +807,14 @@ class AdminAppState extends Equatable {
   final int? shareRewardPoints;
   final YallaCashFailure? failure;
 
+  /// Every offer (all statuses) per store id, loaded on demand by
+  /// [AdminAppCubit.loadStoreOffers]. Read them with [offersFor].
+  final Map<String, StoreOffersState> storeOffers;
+
   bool get isAuthenticated => session?.role == YallaUserRole.admin;
+
+  StoreOffersState offersFor(String storeId) =>
+      storeOffers[storeId] ?? const StoreOffersState();
 
   AdminAppState copyWith({
     LoadStatus? status,
@@ -680,6 +832,7 @@ class AdminAppState extends Equatable {
     Object? minCashWithdrawalSyp = _unset,
     Object? shareRewardPoints = _unset,
     Object? failure = _unset,
+    Map<String, StoreOffersState>? storeOffers,
   }) =>
       AdminAppState(
         status: status ?? this.status,
@@ -708,6 +861,7 @@ class AdminAppState extends Equatable {
         failure: identical(failure, _unset)
             ? this.failure
             : failure as YallaCashFailure?,
+        storeOffers: storeOffers ?? this.storeOffers,
       );
 
   @override
@@ -727,6 +881,7 @@ class AdminAppState extends Equatable {
         minCashWithdrawalSyp,
         shareRewardPoints,
         failure,
+        storeOffers,
       ];
 }
 
@@ -1028,8 +1183,136 @@ class AdminAppCubit extends Cubit<AdminAppState> {
         await refresh();
       });
 
+  // ---- Store offers. These never touch the global status or failure.
+
+  final _offersLoader = _StoreOffersLoader();
+
+  /// Bumped on logout so late results from the old session are dropped.
+  var _offersEpoch = 0;
+
+  /// Admin preview images, held in memory only (never on disk), keyed by
+  /// offer id and imageVersion so a new upload is fetched again. Concurrent
+  /// requests share one download. Failed downloads are not cached.
+  final Map<String, Future<OfferImageData>> _offerImages = {};
+  static const _offerImageCacheSize = 40;
+
+  /// Loads every offer of [storeId] into [AdminAppState.offersFor].
+  Future<void> loadStoreOffers(String storeId) => _offersLoader.load(
+        storeId: storeId,
+        fetch: () => _repository.listAdminStoreOffers(storeId),
+        isClosed: () => isClosed,
+        update: (change) => _updateStoreOffers(storeId, change),
+      );
+
+  /// The server assigns the offer id, so the image is uploaded after the
+  /// offer has been created.
+  Future<bool> createOffer(
+    String storeId,
+    StoreOfferDraft draft, {
+    StoreLogoUpload? image,
+  }) =>
+      _runOfferOperation(storeId, () async {
+        final saved = await _repository.createOffer(storeId, draft);
+        if (image != null) await _repository.setOfferImage(saved.id, image);
+      });
+
+  /// Applies [update] (skipped when empty), then the image change, if any.
+  Future<bool> updateOffer(
+    StoreOffer offer,
+    StoreOfferUpdate update, {
+    StoreLogoUpload? image,
+    bool removeImage = false,
+  }) =>
+      _runOfferOperation(offer.storeId, () async {
+        if (!update.isEmpty) await _repository.updateOffer(offer.id, update);
+        if (image != null) {
+          await _repository.setOfferImage(offer.id, image);
+        } else if (removeImage) {
+          await _repository.removeOfferImage(offer.id);
+        }
+      });
+
+  /// Deletes exactly this offer.
+  Future<bool> deleteOffer(StoreOffer offer) =>
+      _runOfferOperation(offer.storeId, () async {
+        await _repository.deleteOffer(offer.id);
+      });
+
+  /// Image bytes for [offer] from the authenticated admin preview endpoint,
+  /// or null when the offer has no image. Throws [YallaCashFailure].
+  Future<OfferImageData?> loadOfferImage(StoreOffer offer) {
+    if (!offer.hasImage) return Future.value(null);
+    final key = '${offer.id}@${offer.imageVersion}';
+    final cached = _offerImages.remove(key);
+    if (cached != null) {
+      _offerImages[key] = cached; // most recently used goes last
+      return cached;
+    }
+    final download = _repository.fetchAdminOfferImage(
+      offer.id,
+      imageVersion: offer.imageVersion,
+    );
+    _offerImages[key] = download;
+    while (_offerImages.length > _offerImageCacheSize) {
+      _offerImages.remove(_offerImages.keys.first);
+    }
+    download.then<void>((_) {}, onError: (Object _) {
+      if (identical(_offerImages[key], download)) _offerImages.remove(key);
+    });
+    return download;
+  }
+
+  void _updateStoreOffers(
+    String storeId,
+    StoreOffersState Function(StoreOffersState current) change,
+  ) =>
+      emit(state.copyWith(
+        storeOffers: _withStoreOffers(state.storeOffers, storeId, change),
+      ));
+
+  /// Runs an offer [action] with its own operation status on [storeId],
+  /// then reloads that store's offers. The reload also runs after a failure,
+  /// because the action may have partly succeeded (for example, the offer was
+  /// created but its image upload failed). Returns true only on full success.
+  Future<bool> _runOfferOperation(
+    String storeId,
+    Future<void> Function() action,
+  ) async {
+    final epoch = _offersEpoch;
+    bool isCurrent() => !isClosed && epoch == _offersEpoch;
+
+    _updateStoreOffers(
+      storeId,
+      (current) => current.copyWith(
+        operationStatus: LoadStatus.loading,
+        operationFailure: null,
+      ),
+    );
+    YallaCashFailure? failure;
+    try {
+      await action();
+    } on Object catch (error, stackTrace) {
+      failure = _asFailure(error, stackTrace);
+    }
+    if (!isCurrent()) return false;
+    await loadStoreOffers(storeId);
+    if (!isCurrent()) return false;
+    _updateStoreOffers(
+      storeId,
+      (current) => current.copyWith(
+        operationStatus:
+            failure == null ? LoadStatus.success : LoadStatus.failure,
+        operationFailure: failure,
+      ),
+    );
+    return failure == null;
+  }
+
   Future<void> logout() async {
     await _repository.logout();
+    _offersEpoch += 1;
+    _offersLoader.reset();
+    _offerImages.clear();
     emit(const AdminAppState());
   }
 
