@@ -94,7 +94,7 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     required String phone,
     required String code,
     required String name,
-    required String governorate,
+    String? governorate,
   }) async {
     if (challengeId != 'demo-otp' || code != '000000') {
       throw const YallaCashFailure(
@@ -121,7 +121,7 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
     required AuthMethod provider,
     required String firebaseIdToken,
     required String name,
-    required String governorate,
+    String? governorate,
   }) async {
     _store.registerCustomer(
       name: name,

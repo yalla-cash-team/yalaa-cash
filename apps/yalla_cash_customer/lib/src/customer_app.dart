@@ -215,29 +215,11 @@ class CustomerAuthScreen extends StatefulWidget {
 
 class _CustomerAuthScreenState extends State<CustomerAuthScreen>
     with SingleTickerProviderStateMixin {
-  static const governorates = [
-    'دمشق',
-    'ريف دمشق',
-    'حلب',
-    'حمص',
-    'حماة',
-    'اللاذقية',
-    'طرطوس',
-    'إدلب',
-    'درعا',
-    'السويداء',
-    'القنيطرة',
-    'دير الزور',
-    'الرقة',
-    'الحسكة',
-  ];
-
   AuthMethod? method;
   _AuthStage stage = _AuthStage.options;
   final nameController = TextEditingController();
   final phoneController = TextEditingController();
   final otpController = TextEditingController();
-  String? governorate;
   PhoneOtpChallenge? otpChallenge;
   String? _pendingOAuthIdToken;
   String? errorMessage;
@@ -450,25 +432,12 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
                   ] else ...[
                     TextField(
                       controller: nameController,
-                      textInputAction: TextInputAction.next,
+                      textInputAction: TextInputAction.done,
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
                         labelText: 'الاسم الكامل',
                         prefixIcon: Icon(Icons.person_outline_rounded),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: governorate,
-                      decoration: const InputDecoration(
-                        labelText: 'المحافظة',
-                        prefixIcon: Icon(Icons.location_on_outlined),
-                      ),
-                      items: governorates
-                          .map((item) =>
-                              DropdownMenuItem(value: item, child: Text(item)))
-                          .toList(),
-                      onChanged: (value) => setState(() => governorate = value),
                     ),
                     if (errorMessage != null) _ErrorMessage(errorMessage!),
                     const SizedBox(height: 18),
@@ -496,8 +465,9 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
   }
 
   bool get _canSubmit {
-    final hasProfile =
-        nameController.text.trim().isNotEmpty && governorate != null;
+    // The governorate is chosen after sign-in (CustomerGovernorateGate) from
+    // the governorates activated in Admin, so sign-up only needs a name.
+    final hasProfile = nameController.text.trim().isNotEmpty;
     if (method == AuthMethod.phone) {
       return hasProfile &&
           phoneController.text.trim().length >= 8 &&
@@ -680,7 +650,6 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
         phone: phoneController.text.trim(),
         code: otpController.text.trim(),
         name: nameController.text.trim(),
-        governorate: governorate!,
       );
     } else {
       final idToken = _pendingOAuthIdToken;
@@ -696,7 +665,6 @@ class _CustomerAuthScreenState extends State<CustomerAuthScreen>
         provider: method!,
         firebaseIdToken: idToken,
         name: nameController.text.trim(),
-        governorate: governorate!,
       );
     }
     if (!mounted) return;

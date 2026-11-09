@@ -155,14 +155,17 @@ abstract class YallaCashRepository {
     required String phone,
     required String code,
     required String name,
-    required String governorate,
+
+    /// Legacy free-text label; new sign-ups omit it and pick an active
+    /// governorate after sign-in.
+    String? governorate,
   });
 
   Future<AuthSession> signInCustomerWithOAuth({
     required AuthMethod provider,
     required String firebaseIdToken,
     required String name,
-    required String governorate,
+    String? governorate,
   });
 
   Future<AuthSession> signInMerchant({

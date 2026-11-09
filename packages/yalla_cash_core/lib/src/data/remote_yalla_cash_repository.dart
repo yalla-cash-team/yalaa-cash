@@ -37,7 +37,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
     required String phone,
     required String code,
     required String name,
-    required String governorate,
+    String? governorate,
   }) =>
       _authenticate(
         '/auth/customer/phone/verify',
@@ -46,7 +46,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
           'phone': phone,
           'code': code,
           'name': name,
-          'governorate': governorate,
+          if (governorate != null) 'governorate': governorate,
         },
       );
 
@@ -55,7 +55,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
     required AuthMethod provider,
     required String firebaseIdToken,
     required String name,
-    required String governorate,
+    String? governorate,
   }) =>
       _authenticate(
         '/auth/customer/oauth',
@@ -63,7 +63,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
           'provider': provider == AuthMethod.gmail ? 'GOOGLE' : 'FACEBOOK',
           'firebaseIdToken': firebaseIdToken,
           'name': name,
-          'governorate': governorate,
+          if (governorate != null) 'governorate': governorate,
         },
       );
 

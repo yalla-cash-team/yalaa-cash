@@ -476,7 +476,7 @@ class YallaCashStore extends ChangeNotifier {
 
   void registerCustomer({
     required String name,
-    required String governorate,
+    String? governorate,
     required AuthMethod authMethod,
     String? phone,
   }) {
@@ -485,7 +485,7 @@ class YallaCashStore extends ChangeNotifier {
       name: name.trim(),
       phone: phone?.trim(),
       authMethod: authMethod,
-      governorate: governorate,
+      governorate: governorate ?? '',
       pointsBalance: 0,
       createdAt: DateTime.now(),
     );

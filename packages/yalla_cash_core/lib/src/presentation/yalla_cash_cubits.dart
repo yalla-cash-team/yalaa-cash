@@ -392,7 +392,7 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     required String phone,
     required String code,
     required String name,
-    required String governorate,
+    String? governorate,
   }) async {
     await _run(() async {
       final session = await _repository.verifyCustomerPhoneOtp(
@@ -411,7 +411,7 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     required AuthMethod provider,
     required String firebaseIdToken,
     required String name,
-    required String governorate,
+    String? governorate,
   }) async {
     await _run(() async {
       final session = await _repository.signInCustomerWithOAuth(

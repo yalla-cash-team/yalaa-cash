@@ -35,10 +35,13 @@ export class VerifyPhoneOtpDto {
   @MaxLength(80)
   name!: string;
 
+  /// Legacy free-text governorate sent by older Customer apps. Newer apps
+  /// omit it: the customer picks an active governorate after sign-in.
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(40)
-  governorate!: string;
+  governorate?: string;
 }
 
 export class CustomerOAuthDto {
@@ -54,10 +57,12 @@ export class CustomerOAuthDto {
   @MaxLength(80)
   name!: string;
 
+  /// Legacy free-text governorate; optional (see VerifyPhoneOtpDto).
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(40)
-  governorate!: string;
+  governorate?: string;
 }
 
 export class PasswordLoginDto {

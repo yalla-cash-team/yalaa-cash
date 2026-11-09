@@ -21,6 +21,23 @@ import { FirebaseOAuthService } from "./firebase-oauth.service";
 import { LinkSyriaOtpService } from "./linksyria/linksyria-otp.service";
 import { PasswordService } from "./password.service";
 
+/// `CustomerProfile.governorate` is a legacy free-text label. New Customer
+/// apps no longer send it (the customer picks an active governorate after
+/// sign-in, which sets `governorateId`); older apps still do.
+///
+/// On create the column is required, so an omitted value is stored as "".
+export function legacyGovernorateOnCreate(governorate?: string): string {
+  return governorate?.trim() ?? "";
+}
+
+/// On update (an existing customer signing in again) an omitted value leaves
+/// the saved label untouched; a value from an older app replaces it as before.
+export function legacyGovernorateUpdate(governorate?: string): {
+  governorate?: string;
+} {
+  return governorate === undefined ? {} : { governorate: governorate.trim() };
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -106,12 +123,12 @@ export class AuthService {
         where: { userId: saved.id },
         update: {
           name: dto.name.trim(),
-          governorate: dto.governorate.trim(),
+          ...legacyGovernorateUpdate(dto.governorate),
         },
         create: {
           userId: saved.id,
           name: dto.name.trim(),
-          governorate: dto.governorate.trim(),
+          governorate: legacyGovernorateOnCreate(dto.governorate),
         },
       });
 
@@ -157,11 +174,11 @@ export class AuthService {
           upsert: {
             update: {
               name: dto.name.trim(),
-              governorate: dto.governorate.trim(),
+              ...legacyGovernorateUpdate(dto.governorate),
             },
             create: {
               name: dto.name.trim(),
-              governorate: dto.governorate.trim(),
+              governorate: legacyGovernorateOnCreate(dto.governorate),
             },
           },
         },
@@ -176,7 +193,7 @@ export class AuthService {
         customer: {
           create: {
             name: dto.name.trim(),
-            governorate: dto.governorate.trim(),
+            governorate: legacyGovernorateOnCreate(dto.governorate),
           },
         },
       },
