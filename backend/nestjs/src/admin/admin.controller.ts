@@ -21,6 +21,7 @@ import {
   AdminListProductRedemptionsDto,
   AdminListTransactionsDto,
   CreateBannerDto,
+  CreateCityDto,
   CreateDigitalProductDto,
   CreateGovernorateDto,
   CreateMerchantAccountDto,
@@ -35,6 +36,7 @@ import {
   SettleStoreDto,
   SettlementQueryDto,
   UpdateBannerDto,
+  UpdateCityDto,
   UpdateDigitalProductDto,
   UpdateGovernorateDto,
   UpdatePointSettingsDto,
@@ -136,6 +138,21 @@ export class AdminController {
   @Get("governorates")
   listGovernorates() {
     return this.admin.listGovernorates();
+  }
+
+  @Get("cities")
+  listCities(@Query("governorateId") governorateId?: string) {
+    return this.admin.listCities(governorateId);
+  }
+
+  @Post("cities")
+  createCity(@Body() dto: CreateCityDto) {
+    return this.admin.createCity(dto);
+  }
+
+  @Patch("cities/:cityId")
+  updateCity(@Param("cityId") cityId: string, @Body() dto: UpdateCityDto) {
+    return this.admin.updateCity(cityId, dto);
   }
 
   @Get("banners")

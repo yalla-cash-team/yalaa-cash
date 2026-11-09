@@ -21,8 +21,15 @@ export class StoresService {
         // stores from a different governorate. Omitted entirely (no
         // filter) only when the caller doesn't provide a governorateId.
         ...(query.governorateId ? { governorateId: query.governorateId } : {}),
+        // City by id is exact: stores of another city never leak in.
+        ...(query.cityId ? { cityId: query.cityId } : {}),
       },
-      orderBy: [{ city: "asc" }, { category: "asc" }, { name: "asc" }],
+      orderBy: [
+        { city: "asc" },
+        { displayOrder: "asc" },
+        { name: "asc" },
+        { id: "asc" },
+      ],
     });
     return { items: stores.map(presentStore) };
   }

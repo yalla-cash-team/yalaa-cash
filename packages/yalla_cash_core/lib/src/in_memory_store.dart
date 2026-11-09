@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart';
 import 'package:yalla_cash_core/src/commission.dart';
 import 'package:yalla_cash_core/src/models.dart';
+import 'package:yalla_cash_core/src/store_ordering.dart';
 
 class YallaCashStore extends ChangeNotifier {
   YallaCashStore.demo() {
@@ -23,6 +24,33 @@ class YallaCashStore extends ChangeNotifier {
         createdAt: DateTime(2026, 8, 20),
         updatedAt: DateTime(2026, 8, 20),
       ),
+    ]);
+    _cities.addAll(const [
+      City(
+          id: 'city-idlib',
+          governorateId: 'gov-idlib',
+          nameAr: 'إدلب',
+          displayOrder: 1),
+      City(
+          id: 'city-ariha',
+          governorateId: 'gov-idlib',
+          nameAr: 'أريحا',
+          displayOrder: 2),
+      City(
+          id: 'city-salqin',
+          governorateId: 'gov-idlib',
+          nameAr: 'سلقين',
+          displayOrder: 3),
+      City(
+          id: 'city-saraqib',
+          governorateId: 'gov-idlib',
+          nameAr: 'سراقب',
+          displayOrder: 4),
+      City(
+          id: 'city-damascus',
+          governorateId: 'gov-damascus',
+          nameAr: 'دمشق',
+          displayOrder: 1),
     ]);
     _customers.addAll([
       Customer(
@@ -85,6 +113,8 @@ class YallaCashStore extends ChangeNotifier {
         location: 'دمشق - المزة',
         iconSeed: 0,
         governorateId: 'gov-damascus',
+        cityId: 'city-damascus',
+        displayOrder: 1,
       ),
       PartnerStore(
         id: 'store-002',
@@ -95,6 +125,8 @@ class YallaCashStore extends ChangeNotifier {
         location: 'دمشق - الميدان',
         iconSeed: 1,
         governorateId: 'gov-damascus',
+        cityId: 'city-damascus',
+        displayOrder: 2,
       ),
       PartnerStore(
         id: 'store-003',
@@ -105,6 +137,8 @@ class YallaCashStore extends ChangeNotifier {
         location: 'دمشق - أبو رمانة',
         iconSeed: 2,
         governorateId: 'gov-damascus',
+        cityId: 'city-damascus',
+        displayOrder: 3,
       ),
       PartnerStore(
         id: 'store-004',
@@ -115,6 +149,8 @@ class YallaCashStore extends ChangeNotifier {
         location: 'إدلب - مركز المدينة',
         iconSeed: 3,
         governorateId: 'gov-idlib',
+        cityId: 'city-idlib',
+        displayOrder: 1,
       ),
       PartnerStore(
         id: 'store-005',
@@ -125,6 +161,8 @@ class YallaCashStore extends ChangeNotifier {
         location: 'إدلب - شارع الثلاثين',
         iconSeed: 4,
         governorateId: 'gov-idlib',
+        cityId: 'city-idlib',
+        displayOrder: 2,
       ),
     ]);
 
@@ -197,6 +235,7 @@ class YallaCashStore extends ChangeNotifier {
 
   final List<Customer> _customers = [];
   final List<Governorate> _governorates = [];
+  final List<City> _cities = [];
   final List<Banner> _banners = [];
   final List<PartnerStore> _stores = [];
   final List<DigitalProduct> _products = [];
@@ -216,11 +255,14 @@ class YallaCashStore extends ChangeNotifier {
     shareRewardPoints = value;
     notifyListeners();
   }
+
   // Earned value not yet converted into whole points, per customer (1/10000 SYP).
   final Map<String, int> _pointRemainderScaled = {};
 
   UnmodifiableListView<Customer> get customers =>
       UnmodifiableListView(_customers);
+  UnmodifiableListView<City> get cities => UnmodifiableListView(_cities);
+
   UnmodifiableListView<Governorate> get governorates =>
       UnmodifiableListView(_governorates);
   UnmodifiableListView<Banner> get banners => UnmodifiableListView(_banners);
@@ -277,10 +319,123 @@ class YallaCashStore extends ChangeNotifier {
     currentCustomer = customer.copyWith(
       governorate: governorate.nameAr,
       governorateId: governorate.id,
+      clearCity: true,
     );
     final index = _customers.indexWhere((item) => item.id == customer.id);
     if (index >= 0) _customers[index] = currentCustomer!;
     notifyListeners();
+  }
+
+  /// The city must be active and inside the customer's governorate.
+  void updateCustomerCity(String cityId) {
+    final customer = currentCustomer;
+    if (customer == null) return;
+    final city = _cities.firstWhere(
+      (item) =>
+          item.id == cityId &&
+          item.isActive &&
+          item.governorateId == customer.governorateId,
+      orElse: () => throw StateError('City is not available.'),
+    );
+    currentCustomer = customer.copyWith(cityId: city.id);
+    final index = _customers.indexWhere((item) => item.id == customer.id);
+    if (index >= 0) _customers[index] = currentCustomer!;
+    notifyListeners();
+  }
+
+  void addCity(City city) {
+    _cities.add(city);
+    notifyListeners();
+  }
+
+  void updateCity(City city) {
+    final index = _cities.indexWhere((item) => item.id == city.id);
+    if (index < 0) return;
+    _cities[index] = city;
+    notifyListeners();
+  }
+
+  /// Active stores of [cityId] in display order (position, then name, id).
+  List<PartnerStore> activeStoresOfCity(String cityId, {String? except}) =>
+      _stores
+          .where((s) => s.cityId == cityId && s.isActive && s.id != except)
+          .toList()
+        ..sort((a, b) {
+          final byOrder = a.displayOrder.compareTo(b.displayOrder);
+          if (byOrder != 0) return byOrder;
+          final byName = a.name.compareTo(b.name);
+          return byName != 0 ? byName : a.id.compareTo(b.id);
+        });
+
+  void _renumber(List<String> ids) {
+    for (var i = 0; i < ids.length; i++) {
+      final index = _stores.indexWhere((s) => s.id == ids[i]);
+      if (index >= 0 && _stores[index].displayOrder != i + 1) {
+        _stores[index] = _stores[index].copyWith(displayOrder: i + 1);
+      }
+    }
+  }
+
+  /// Creates or replaces [store], applying the same ordering rules as the
+  /// backend: one active store per city/category, insertion into an occupied
+  /// position shifts the others, leaving a city closes its gap, a new or
+  /// reactivated store without a position goes last, inactive stores hold 0.
+  PartnerStore saveStore(PartnerStore store) {
+    final index = _stores.indexWhere((s) => s.id == store.id);
+    final previous = index < 0 ? null : _stores[index];
+    final cityId = store.cityId;
+    if (store.isActive) {
+      if (cityId == null) throw StateError('A city is required.');
+      final city = _cities.firstWhere((c) => c.id == cityId,
+          orElse: () => throw StateError('City was not found.'));
+      if (city.governorateId != store.governorateId) {
+        throw StateError('City does not belong to the governorate.');
+      }
+      if (!city.isActive) throw StateError('City is not active.');
+      final clash = _stores.any((s) =>
+          s.id != store.id &&
+          s.isActive &&
+          s.cityId == cityId &&
+          s.category.toLowerCase() == store.category.toLowerCase());
+      if (clash) {
+        throw StateError('An active exclusive store already exists.');
+      }
+    }
+    if (previous != null &&
+        previous.isActive &&
+        previous.cityId != null &&
+        (!store.isActive || previous.cityId != cityId)) {
+      _renumber(activeStoresOfCity(previous.cityId!, except: store.id)
+          .map((s) => s.id)
+          .toList());
+    }
+    var saved = store;
+    if (!store.isActive || cityId == null) {
+      saved = store.copyWith(displayOrder: 0);
+      _put(index, saved);
+    } else {
+      final sameCity =
+          previous != null && previous.isActive && previous.cityId == cityId;
+      final requested = store.displayOrder > 0
+          ? store.displayOrder
+          : (sameCity ? previous.displayOrder : null);
+      final siblings = activeStoresOfCity(cityId, except: store.id);
+      final order = insertAtPosition(
+          siblings.map((s) => s.id).toList(), store.id, requested);
+      saved = store.copyWith(displayOrder: order.indexOf(store.id) + 1);
+      _put(index, saved);
+      _renumber(order);
+    }
+    notifyListeners();
+    return _stores.firstWhere((s) => s.id == store.id);
+  }
+
+  void _put(int index, PartnerStore store) {
+    if (index < 0) {
+      _stores.add(store);
+    } else {
+      _stores[index] = store;
+    }
   }
 
   void setCurrentCustomer(Customer customer) {
@@ -406,7 +561,13 @@ class YallaCashStore extends ChangeNotifier {
   void deleteStore(String storeId) {
     final index = _stores.indexWhere((item) => item.id == storeId);
     if (index < 0) return;
-    _stores[index] = _stores[index].copyWith(isActive: false);
+    final previous = _stores[index];
+    _stores[index] = previous.copyWith(isActive: false, displayOrder: 0);
+    if (previous.isActive && previous.cityId != null) {
+      _renumber(activeStoresOfCity(previous.cityId!, except: storeId)
+          .map((s) => s.id)
+          .toList());
+    }
     notifyListeners();
   }
 

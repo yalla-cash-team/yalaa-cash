@@ -1,6 +1,7 @@
 import {
   AuthMethod,
   Banner,
+  City,
   BannerPlacement,
   CashRequestStatus,
   DigitalProduct,
@@ -17,6 +18,7 @@ type CustomerWithUser = {
   name: string;
   governorate: string;
   governorateId: string | null;
+  cityId?: string | null;
   pointsBalance: bigint;
   createdAt: Date;
   user: Pick<User, "phone" | "authMethod">;
@@ -65,6 +67,7 @@ export function presentCustomer(customer: CustomerWithUser) {
     authMethod: presentAuthMethod(customer.user.authMethod),
     governorate: customer.governorate,
     governorateId: customer.governorateId,
+    cityId: customer.cityId ?? null,
     pointsBalance: toNumber(customer.pointsBalance),
     createdAt: customer.createdAt.toISOString(),
   };
@@ -104,6 +107,18 @@ export function presentBanner(banner: Banner) {
   };
 }
 
+export function presentCity(city: City) {
+  return {
+    id: city.id,
+    governorateId: city.governorateId,
+    nameAr: city.nameAr,
+    isActive: city.isActive,
+    displayOrder: city.displayOrder,
+    createdAt: city.createdAt.toISOString(),
+    updatedAt: city.updatedAt.toISOString(),
+  };
+}
+
 export function presentStore(store: Store) {
   return {
     id: store.id,
@@ -122,6 +137,8 @@ export function presentStore(store: Store) {
     iconSeed: store.iconSeed,
     isActive: store.isActive,
     governorateId: store.governorateId,
+    cityId: store.cityId ?? null,
+    displayOrder: store.displayOrder ?? 0,
     createdAt: store.createdAt.toISOString(),
   };
 }

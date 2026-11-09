@@ -130,6 +130,44 @@ class RemoteYallaCashRepository implements YallaCashRepository {
           .toList(growable: false);
 
   @override
+  Future<List<City>> listActiveCities({String? governorateId}) async =>
+      apiItems(await _client.get('/customer/cities',
+              query: {'governorateId': governorateId}))
+          .map(_cityFromApi)
+          .toList(growable: false);
+
+  @override
+  Future<Customer> updateCustomerCity(String cityId) async => _customerFromApi(
+        apiMap(await _client.patch('/customer/city', body: {'cityId': cityId})),
+      );
+
+  @override
+  Future<List<City>> listAdminCities({String? governorateId}) async =>
+      apiItems(await _client
+              .get('/admin/cities', query: {'governorateId': governorateId}))
+          .map(_cityFromApi)
+          .toList(growable: false);
+
+  @override
+  Future<City> createCity(City city) async => _cityFromApi(apiMap(
+        await _client.post('/admin/cities', body: {
+          'governorateId': city.governorateId,
+          'nameAr': city.nameAr,
+          'isActive': city.isActive,
+          'displayOrder': city.displayOrder,
+        }),
+      ));
+
+  @override
+  Future<City> updateCity(City city) async => _cityFromApi(apiMap(
+        await _client.patch('/admin/cities/${city.id}', body: {
+          'nameAr': city.nameAr,
+          'isActive': city.isActive,
+          'displayOrder': city.displayOrder,
+        }),
+      ));
+
+  @override
   Future<Customer> updateCustomerGovernorate(String governorateId) async =>
       _customerFromApi(
         apiMap(
@@ -184,7 +222,10 @@ class RemoteYallaCashRepository implements YallaCashRepository {
 
   @override
   Future<List<PartnerStore>> listActiveStores(
-          {String? city, String? category, String? governorateId}) async =>
+          {String? city,
+          String? category,
+          String? governorateId,
+          String? cityId}) async =>
       apiItems(
         await _client.get(
           '/stores',
@@ -192,6 +233,7 @@ class RemoteYallaCashRepository implements YallaCashRepository {
             'city': city,
             'category': category,
             'governorateId': governorateId,
+            'cityId': cityId,
           },
           authenticated: false,
         ),
@@ -835,8 +877,17 @@ class RemoteYallaCashRepository implements YallaCashRepository {
         authMethod: _authMethodFromApi(json['authMethod'] as String?),
         governorate: json['governorate']! as String,
         governorateId: json['governorateId'] as String?,
+        cityId: json['cityId'] as String?,
         pointsBalance: _int(json['pointsBalance']),
         createdAt: DateTime.parse(json['createdAt']! as String),
+      );
+
+  City _cityFromApi(Map<String, Object?> json) => City(
+        id: json['id']! as String,
+        governorateId: json['governorateId']! as String,
+        nameAr: json['nameAr']! as String,
+        isActive: json['isActive'] as bool? ?? true,
+        displayOrder: _int(json['displayOrder'] ?? 0),
       );
 
   Governorate _governorateFromApi(Map<String, Object?> json) => Governorate(
@@ -1018,6 +1069,8 @@ class RemoteYallaCashRepository implements YallaCashRepository {
             (json['location'] as String?) ?? (json['city'] as String?) ?? '',
         iconSeed: _int(json['iconSeed'] ?? 0),
         governorateId: json['governorateId']! as String,
+        cityId: json['cityId'] as String?,
+        displayOrder: _int(json['displayOrder'] ?? 0),
         isActive: json['isActive'] as bool? ?? true,
         logoUrl: _absoluteUrl(json['logoUrl']),
       );
@@ -1134,7 +1187,13 @@ class RemoteYallaCashRepository implements YallaCashRepository {
   Map<String, Object?> _storeToApi(PartnerStore store) => {
         'name': store.name,
         'category': store.category,
-        'city': _cityFromLocation(store.location),
+        // A structured city wins; older data falls back to the location text.
+        if (store.cityId != null)
+          'cityId': store.cityId
+        else
+          'city': _cityFromLocation(store.location),
+        // Omitted (not 0) so a new store lands at the end of its city.
+        if (store.displayOrder > 0) 'displayOrder': store.displayOrder,
         'commissionRate': store.commissionRate,
         'description': store.description,
         'location': store.location,

@@ -9,6 +9,7 @@ import {
   RedeemDigitalProductDto,
   RegisterDeviceTokenDto,
   RequestCashRedemptionDto,
+  UpdateCustomerCityDto,
   UpdateCustomerGovernorateDto,
   UpdateCustomerProfileDto,
 } from "./dto/customer.dto";
@@ -34,6 +35,19 @@ export class CustomerController {
   @Get("governorates")
   listActiveGovernorates() {
     return this.customer.listActiveGovernorates();
+  }
+
+  @Get("cities")
+  listActiveCities(@Query("governorateId") governorateId?: string) {
+    return this.customer.listActiveCities(governorateId);
+  }
+
+  @Patch("city")
+  updateCity(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateCustomerCityDto,
+  ) {
+    return this.customer.updateCity(user.id, dto);
   }
 
   @Patch("governorate")

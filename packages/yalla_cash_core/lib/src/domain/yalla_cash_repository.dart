@@ -188,12 +188,21 @@ abstract class YallaCashRepository {
   });
   Future<List<Governorate>> listActiveGovernorates();
   Future<Customer> updateCustomerGovernorate(String governorateId);
+
+  /// Active cities of [governorateId], in display order.
+  Future<List<City>> listActiveCities({String? governorateId});
+
+  /// Saves the customer's city; it must belong to the customer's governorate.
+  Future<Customer> updateCustomerCity(String cityId);
   Future<List<Banner>> listActiveBanners(
       {String? placement, String? governorateId});
   Future<PointsSummary> getCustomerPoints();
   Future<CustomerQrToken> issueCustomerQrToken();
   Future<List<PartnerStore>> listActiveStores(
-      {String? city, String? category, String? governorateId});
+      {String? city,
+      String? category,
+      String? governorateId,
+      String? cityId});
   Future<List<LoyaltyTransaction>> listCustomerTransactions({String? cursor});
   Future<List<DigitalProduct>> listDigitalProducts();
   Future<List<CashRedemptionRequest>> listCustomerCashRequests();
@@ -244,6 +253,9 @@ abstract class YallaCashRepository {
   Future<void> deleteBanner(String bannerId);
   Future<Governorate> createGovernorate(Governorate governorate);
   Future<Governorate> updateGovernorate(Governorate governorate);
+  Future<List<City>> listAdminCities({String? governorateId});
+  Future<City> createCity(City city);
+  Future<City> updateCity(City city);
   Future<List<CashRedemptionRequest>> listAdminCashRequests({String? status});
   Future<CashRedemptionRequest> resolveCashRequest({
     required String requestId,

@@ -4,7 +4,9 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:yalla_cash_core/yalla_cash_core.dart' hide Banner;
+import 'package:yalla_cash_admin/src/cities_admin.dart';
 import 'package:yalla_cash_admin/src/store_offers_admin.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart' as core show Banner;
 
@@ -596,8 +598,7 @@ class _CashRequestsAdminState extends State<CashRequestsAdmin> {
                       icon: resolving
                           ? const SizedBox.square(
                               dimension: 16,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2))
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.check_rounded),
                       label: const Text('حل الطلب'),
                     ),
@@ -676,7 +677,9 @@ class _ProductRedemptionsAdminState extends State<ProductRedemptionsAdmin> {
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(redemption.customerName ?? redemption.customerId,
+                            Text(
+                                redemption.customerName ??
+                                    redemption.customerId,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w900)),
                             if ((redemption.customerPhone ?? '').isNotEmpty)
@@ -698,8 +701,7 @@ class _ProductRedemptionsAdminState extends State<ProductRedemptionsAdmin> {
                       icon: resolving
                           ? const SizedBox.square(
                               dimension: 16,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2))
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.check_rounded),
                       label: const Text('حل الطلب'),
                     ),
@@ -707,9 +709,8 @@ class _ProductRedemptionsAdminState extends State<ProductRedemptionsAdmin> {
                   SizedBox(
                     width: 140,
                     child: OutlinedButton.icon(
-                      onPressed: resolving
-                          ? null
-                          : () => _resolve(redemption, false),
+                      onPressed:
+                          resolving ? null : () => _resolve(redemption, false),
                       icon: const Icon(Icons.close_rounded),
                       label: const Text('رفض الطلب'),
                     ),
@@ -822,7 +823,8 @@ class _NotificationsAdminState extends State<NotificationsAdmin> {
     });
   }
 
-  String _resultText(NotificationBroadcast? broadcast) => switch (broadcast?.status) {
+  String _resultText(NotificationBroadcast? broadcast) =>
+      switch (broadcast?.status) {
         'SENT' => 'تم إرسال الإشعار إلى ${broadcast!.sentCount} جهاز.',
         'PARTIAL' =>
           'أُرسل إلى ${broadcast!.sentCount} جهاز، وفشل ${broadcast.failedCount}.',
@@ -1162,6 +1164,13 @@ class _GovernoratesAdminState extends State<GovernoratesAdmin> {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          IconButton(
+                              key: Key('manage-cities-${item.id}'),
+                              tooltip: 'إدارة المدن',
+                              onPressed: () => showCitiesManager(context,
+                                  repository: widget.repository,
+                                  governorate: item),
+                              icon: const Icon(Icons.location_city_outlined)),
                           Switch(
                               value: item.isActive,
                               onChanged: (value) => _toggle(item, value)),
@@ -1734,6 +1743,7 @@ class _BannerEditorDialogState extends State<_BannerEditorDialog> {
       }
     });
   }
+
   late final targetUrl =
       TextEditingController(text: widget.item?.targetUrl ?? '');
   late final order = TextEditingController(
@@ -2076,6 +2086,27 @@ class _StoreAdminCardState extends State<_StoreAdminCard> {
               const SizedBox(height: 6),
               Text(widget.partner.location,
                   style: Theme.of(context).textTheme.bodySmall),
+              if (widget.partner.isActive && widget.partner.cityId == null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 16, color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      key: const Key('store-needs-city'),
+                      'بدون مدينة — لن يظهر للعملاء حتى تعيّن مدينة',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                ]),
+              ] else if (widget.partner.displayOrder > 0) ...[
+                const SizedBox(height: 6),
+                Text('ترتيب العرض في المدينة: ${widget.partner.displayOrder}',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
               const SizedBox(height: 14),
               SizedBox(
                 width: double.infinity,
@@ -2210,21 +2241,41 @@ Future<_StoreEditorResult?> _showStoreEditor(
         content: Text('تعذر تحميل قائمة المحافظات. حاول مرة أخرى.')));
     return null;
   }
+  // Cities are loaded with the governorates. A failure is not fatal: the
+  // editor then offers to add a city, and saving still requires one.
+  List<City> cities;
+  try {
+    cities = (await repository.listAdminCities()).toList();
+  } on Object {
+    cities = const [];
+  }
+  if (!context.mounted) return null;
   // The editor dialog owns its TextEditingControllers and builds the
   // resulting PartnerStore itself; no controller outlives the dialog route.
   return showDialog<_StoreEditorResult>(
     context: context,
-    builder: (_) =>
-        _StoreEditorDialog(partner: partner, governorates: governorates),
+    builder: (_) => _StoreEditorDialog(
+      partner: partner,
+      governorates: governorates,
+      cities: cities,
+      repository: repository,
+    ),
   );
 }
 
 /// Create/edit store prompt. Owns its TextEditingController lifecycle.
 class _StoreEditorDialog extends StatefulWidget {
-  const _StoreEditorDialog({required this.governorates, this.partner});
+  const _StoreEditorDialog({
+    required this.governorates,
+    required this.cities,
+    required this.repository,
+    this.partner,
+  });
 
   final PartnerStore? partner;
   final List<Governorate> governorates;
+  final List<City> cities;
+  final YallaCashRepository repository;
 
   @override
   State<_StoreEditorDialog> createState() => _StoreEditorDialogState();
@@ -2243,13 +2294,21 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
   // new store, which the admin must explicitly choose before saving.
   String? governorateChoice;
   String? governorateError;
+  // The city list depends on the governorate and resets when it changes.
+  late List<City> cities = List.of(widget.cities);
+  String? cityChoice;
+  String? cityError;
+  late final displayOrder = TextEditingController(
+      text: (widget.partner?.displayOrder ?? 0) > 0
+          ? '${widget.partner!.displayOrder}'
+          : '');
+  String? displayOrderError;
   StoreLogoUpload? pendingLogo;
   String? logoError;
   bool removeLogo = false;
 
   bool get _hasLogo =>
-      pendingLogo != null ||
-      (!removeLogo && widget.partner?.logoUrl != null);
+      pendingLogo != null || (!removeLogo && widget.partner?.logoUrl != null);
 
   Future<void> _pickLogo() async {
     final picked = await FilePicker.platform.pickFiles(
@@ -2299,10 +2358,69 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
   void initState() {
     super.initState();
     final currentId = widget.partner?.governorateId;
-    governorateChoice = widget.governorates
-        .any((governorate) => governorate.id == currentId)
-        ? currentId
+    governorateChoice =
+        widget.governorates.any((governorate) => governorate.id == currentId)
+            ? currentId
+            : null;
+    final currentCity = widget.partner?.cityId;
+    cityChoice = cities.any(
+            (c) => c.id == currentCity && c.governorateId == governorateChoice)
+        ? currentCity
         : null;
+  }
+
+  /// Active cities of the chosen governorate, plus the store's own current
+  /// city even if it has since been deactivated (so it can still be shown).
+  List<City> get _cityOptions => cities
+      .where((c) =>
+          c.governorateId == governorateChoice &&
+          (c.isActive || c.id == widget.partner?.cityId))
+      .toList()
+    ..sort((a, b) {
+      final byOrder = a.displayOrder.compareTo(b.displayOrder);
+      return byOrder != 0 ? byOrder : a.nameAr.compareTo(b.nameAr);
+    });
+
+  Future<void> _addCity() async {
+    final governorateId = governorateChoice;
+    if (governorateId == null) {
+      setState(() => governorateError = 'اختر المحافظة أولاً.');
+      return;
+    }
+    final nameAr = await showDialog<String>(
+      context: context,
+      builder: (_) => const CityNameDialog(title: 'إضافة مدينة'),
+    );
+    if (nameAr == null) return;
+    // Refuse near-duplicates up front so a typo never becomes a second city.
+    final clash = cityNameKey(nameAr).length < 2
+        ? null
+        : findCityNameClash<City>(
+            cities.where((c) => c.governorateId == governorateId), nameAr,
+            nameOf: (c) => c.nameAr, idOf: (c) => c.id);
+    if (cityNameKey(nameAr).length < 2 || clash != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(clash == null
+              ? 'اسم المدينة قصير جداً.'
+              : 'توجد مدينة بنفس الاسم أو باسم مشابه: ${clash.nameAr}')));
+      return;
+    }
+    try {
+      final created = await widget.repository.createCity(
+          City(id: '', governorateId: governorateId, nameAr: nameAr));
+      if (!mounted) return;
+      setState(() {
+        cities = [...cities, created];
+        cityChoice = created.id;
+        cityError = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(cityErrorMessage(error, fallback: 'تعذرت إضافة المدينة.'))));
+    }
   }
 
   @override
@@ -2312,6 +2430,7 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
     rate.dispose();
     location.dispose();
     description.dispose();
+    displayOrder.dispose();
     super.dispose();
   }
 
@@ -2319,6 +2438,15 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
     final selectedGovernorateId = governorateChoice;
     if (selectedGovernorateId == null) {
       setState(() => governorateError = 'اختر المحافظة قبل الحفظ.');
+      return;
+    }
+    final selectedCityId = cityChoice;
+    final orderError = validateDisplayOrder(displayOrder.text);
+    if (selectedCityId == null || orderError != null) {
+      setState(() {
+        cityError = selectedCityId == null ? 'اختر المدينة قبل الحفظ.' : null;
+        displayOrderError = orderError;
+      });
       return;
     }
     final now = DateTime.now().microsecondsSinceEpoch;
@@ -2335,6 +2463,9 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
           location: location.text.trim(),
           iconSeed: widget.partner?.iconSeed ?? now.remainder(100000),
           governorateId: selectedGovernorateId,
+          cityId: selectedCityId,
+          // Empty = last in the city (the server places it).
+          displayOrder: int.tryParse(displayOrder.text.trim()) ?? 0,
           isActive: widget.partner?.isActive ?? true,
         ),
         logo: pendingLogo,
@@ -2408,13 +2539,72 @@ class _StoreEditorDialogState extends State<_StoreEditorDialog> {
                 ),
                 items: widget.governorates
                     .map((governorate) => DropdownMenuItem(
-                        value: governorate.id,
-                        child: Text(governorate.nameAr)))
+                        value: governorate.id, child: Text(governorate.nameAr)))
                     .toList(),
                 onChanged: (value) => setState(() {
                   governorateChoice = value;
                   governorateError = null;
+                  // A city belongs to one governorate.
+                  cityChoice = null;
+                  cityError = null;
                 }),
+              ),
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey('city-$governorateChoice-$cityChoice'),
+                    initialValue: cityChoice,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'المدينة',
+                      errorText: cityError,
+                      helperText: governorateChoice == null
+                          ? 'اختر المحافظة أولاً'
+                          : (_cityOptions.isEmpty
+                              ? 'لا توجد مدن — أضف مدينة'
+                              : null),
+                    ),
+                    items: _cityOptions
+                        .map((city) => DropdownMenuItem(
+                            value: city.id, child: Text(city.nameAr)))
+                        .toList(),
+                    onChanged: governorateChoice == null
+                        ? null
+                        : (value) => setState(() {
+                              cityChoice = value;
+                              cityError = null;
+                            }),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: IconButton.filledTonal(
+                    key: const Key('add-city'),
+                    tooltip: 'إضافة مدينة',
+                    onPressed: _addCity,
+                    icon: const Icon(Icons.add_location_alt_outlined),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('store-display-order'),
+                controller: displayOrder,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) {
+                  if (displayOrderError != null) {
+                    setState(() => displayOrderError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: 'ترتيب العرض',
+                  helperText:
+                      '1 = الأول في المدينة. اتركه فارغاً ليكون الأخير.',
+                  errorText: displayOrderError,
+                ),
               ),
             ]),
           ),
@@ -2872,15 +3062,15 @@ class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
       }
       if (preview.openMerchantCount == 0) {
         messenger.showSnackBar(SnackBar(
-            content: Text('لا توجد فواتير غير مسددة لشهر ${_label(_selected)}.')));
+            content:
+                Text('لا توجد فواتير غير مسددة لشهر ${_label(_selected)}.')));
         return;
       }
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('تأكيد التسوية الشهرية'),
-          content: Text(
-              'شهر ${_label(_selected)}\n'
+          content: Text('شهر ${_label(_selected)}\n'
               'عدد التجار: ${preview.openMerchantCount}\n'
               'إجمالي المبيعات: ${formatNumber(preview.totalSalesSyp)} ل.س\n'
               'إجمالي العمولة المستحقة: ${formatNumber(preview.totalCommissionSyp)} ل.س\n\n'
@@ -2912,8 +3102,7 @@ class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('نتيجة التسوية الشهرية'),
-          content: Text(
-              'تمت تسوية ${result.settledCount} تاجراً بإجمالي عمولة '
+          content: Text('تمت تسوية ${result.settledCount} تاجراً بإجمالي عمولة '
               '${formatNumber(result.totalCommissionSyp)} ل.س.\n'
               'تم تخطي ${result.skippedCount} (مسددة سابقاً).\n'
               'فشل ${result.failedCount}${failed.isEmpty ? '' : ': $failed'}.'),
@@ -2954,11 +3143,13 @@ class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
                   decoration: const InputDecoration(labelText: 'الشهر'),
                   items: [
                     for (final month in _months)
-                      DropdownMenuItem(value: month, child: Text(_label(month))),
+                      DropdownMenuItem(
+                          value: month, child: Text(_label(month))),
                   ],
                   onChanged: _busy
                       ? null
-                      : (value) => setState(() => _selected = value ?? _selected),
+                      : (value) =>
+                          setState(() => _selected = value ?? _selected),
                 ),
               ),
               const SizedBox(width: 12),
@@ -2982,7 +3173,8 @@ class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
                 if (snapshot.connectionState != ConnectionState.done) {
                   return const LinearProgressIndicator();
                 }
-                final items = snapshot.data ?? const <MonthlySettlementRecord>[];
+                final items =
+                    snapshot.data ?? const <MonthlySettlementRecord>[];
                 if (items.isEmpty) {
                   return const Padding(
                     padding: EdgeInsets.only(top: 8),
@@ -2995,7 +3187,8 @@ class _MonthlySettlementCardState extends State<MonthlySettlementCard> {
                       ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text('${item.storeName} · ${_label(item.month)}',
-                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
                         subtitle: Text(
                             '${formatNumber(item.commissionDueSyp)} ل.س عمولة · '
                             '${item.transactionCount} عملية'),
@@ -3034,12 +3227,12 @@ String _formatPointValue(double value) =>
     value == value.roundToDouble() ? value.toInt().toString() : '$value';
 
 class _SettingsAdminState extends State<SettingsAdmin> {
-  late final controller = TextEditingController(
-      text: _formatPointValue(widget.pointValueSyp ?? 1));
+  late final controller =
+      TextEditingController(text: _formatPointValue(widget.pointValueSyp ?? 1));
   late final minCashController = TextEditingController(
       text: (widget.minCashWithdrawalSyp ?? 0).toString());
-  late final shareRewardController = TextEditingController(
-      text: (widget.shareRewardPoints ?? 0).toString());
+  late final shareRewardController =
+      TextEditingController(text: (widget.shareRewardPoints ?? 0).toString());
 
   @override
   void didUpdateWidget(covariant SettingsAdmin oldWidget) {
@@ -3174,8 +3367,8 @@ class _SettingsAdminState extends State<SettingsAdmin> {
   Future<void> _saveMinCashWithdrawal() async {
     final value = int.tryParse(minCashController.text.trim());
     if (value == null || value < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('أدخل مبلغاً صحيحاً بالليرة السورية.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('أدخل مبلغاً صحيحاً بالليرة السورية.')));
       return;
     }
     final saved = await widget.cubit.updateMinCashWithdrawal(value);

@@ -26,6 +26,7 @@ import {
   presentCashRequest,
   presentCustomer,
   presentDigitalProduct,
+  presentCity,
   presentGovernorate,
   presentProductRedemption,
   presentTransaction,
@@ -36,6 +37,7 @@ import {
   RedeemDigitalProductDto,
   RegisterDeviceTokenDto,
   RequestCashRedemptionDto,
+  UpdateCustomerCityDto,
   UpdateCustomerGovernorateDto,
   UpdateCustomerProfileDto,
 } from "./dto/customer.dto";
@@ -86,6 +88,43 @@ export class CustomerService {
     return { items: items.map(presentGovernorate) };
   }
 
+  async listActiveCities(governorateId?: string) {
+    const items = await this.prisma.city.findMany({
+      where: {
+        isActive: true,
+        governorate: { isActive: true },
+        ...(governorateId ? { governorateId } : {}),
+      },
+      orderBy: [{ displayOrder: "asc" }, { nameAr: "asc" }, { id: "asc" }],
+    });
+    return { items: items.map(presentCity) };
+  }
+
+  /// The chosen city must be active and inside the customer's governorate.
+  async updateCity(userId: string, dto: UpdateCustomerCityDto) {
+    const profile = await this.prisma.customerProfile.findUnique({
+      where: { userId },
+      select: { governorateId: true },
+    });
+    const city = await this.prisma.city.findFirst({
+      where: { id: dto.cityId, isActive: true },
+    });
+    if (!city) {
+      throw new BadRequestException("City is not active or does not exist.");
+    }
+    if (!profile || profile.governorateId !== city.governorateId) {
+      throw new BadRequestException(
+        "City does not belong to the selected governorate.",
+      );
+    }
+    const updated = await this.prisma.customerProfile.update({
+      where: { userId },
+      data: { cityId: city.id },
+      include: { user: true },
+    });
+    return presentCustomer(updated);
+  }
+
   async updateGovernorate(userId: string, dto: UpdateCustomerGovernorateDto) {
     const governorate = await this.prisma.governorate.findFirst({
       where: { id: dto.governorateId, isActive: true },
@@ -100,6 +139,8 @@ export class CustomerService {
       data: {
         governorateId: governorate.id,
         governorate: governorate.nameAr,
+        // A city belongs to one governorate; changing it clears the old one.
+        cityId: null,
       },
       include: { user: true },
     });

@@ -20,9 +20,12 @@ import {
   settleEachMerchant,
   summarizeOutcomes,
 } from "./monthly-settlement";
+import { cityNameKey, normalizeCityName } from "./city-names";
+import { insertAtPosition, positionChanges } from "./store-ordering";
 import { PasswordService } from "../auth/password.service";
 import {
   presentBanner,
+  presentCity,
   presentCashRequest,
   presentCustomer,
   presentDigitalProduct,
@@ -40,6 +43,7 @@ import {
   AdminListCashRequestsDto,
   AdminListProductRedemptionsDto,
   CreateBannerDto,
+  CreateCityDto,
   CreateDigitalProductDto,
   CreateGovernorateDto,
   CreateMerchantAccountDto,
@@ -48,6 +52,7 @@ import {
   SettleStoreDto,
   SettlementQueryDto,
   UpdateBannerDto,
+  UpdateCityDto,
   UpdateDigitalProductDto,
   UpdateGovernorateDto,
   UpdatePointSettingsDto,
@@ -352,7 +357,12 @@ export class AdminService {
 
   async listStores() {
     const stores = await this.prisma.store.findMany({
-      orderBy: [{ city: "asc" }, { category: "asc" }, { name: "asc" }],
+      orderBy: [
+        { city: "asc" },
+        { displayOrder: "asc" },
+        { name: "asc" },
+        { id: "asc" },
+      ],
     });
     return { items: stores.map(presentStore) };
   }
@@ -470,61 +480,324 @@ export class AdminService {
     return presentGovernorate(item);
   }
 
-  async createStore(dto: CreateStoreDto) {
-    await this.assertExclusiveStoreSlot(dto.city, dto.category);
-    const store = await this.prisma.store.create({
+  async listCities(governorateId?: string) {
+    const items = await this.prisma.city.findMany({
+      where: governorateId ? { governorateId } : {},
+      orderBy: [{ displayOrder: "asc" }, { nameAr: "asc" }, { id: "asc" }],
+    });
+    return { items: items.map(presentCity) };
+  }
+
+  async createCity(dto: CreateCityDto) {
+    const governorate = await this.prisma.governorate.findUnique({
+      where: { id: dto.governorateId },
+    });
+    if (!governorate) throw new NotFoundException("Governorate was not found.");
+    const nameAr = normalizeCityName(dto.nameAr);
+    await this.assertCityNameFree(dto.governorateId, nameAr);
+    const city = await this.prisma.city.create({
       data: {
-        name: dto.name.trim(),
-        category: dto.category.trim(),
-        city: dto.city.trim(),
-        commissionRate: new Prisma.Decimal(dto.commissionRate),
-        description: dto.description?.trim() ?? "",
-        location: dto.location?.trim() ?? "",
-        imageUrl: dto.imageUrl?.trim() || null,
-        iconSeed: dto.iconSeed ?? 0,
-        isActive: dto.isActive ?? true,
         governorateId: dto.governorateId,
+        nameAr,
+        isActive: dto.isActive ?? true,
+        displayOrder: dto.displayOrder ?? 0,
       },
     });
+    return presentCity(city);
+  }
+
+  async updateCity(cityId: string, dto: UpdateCityDto) {
+    const current = await this.prisma.city.findUnique({ where: { id: cityId } });
+    if (!current) throw new NotFoundException("City was not found.");
+    const nameAr = dto.nameAr ? normalizeCityName(dto.nameAr) : undefined;
+    if (nameAr && nameAr !== current.nameAr) {
+      await this.assertCityNameFree(current.governorateId, nameAr, cityId);
+    }
+    if (dto.isActive === false && current.isActive) {
+      const live = await this.prisma.store.count({
+        where: { cityId, isActive: true },
+      });
+      if (live > 0) {
+        throw new ConflictException(
+          "Deactivate or move the city's active stores first.",
+        );
+      }
+    }
+    const city = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.city.update({
+        where: { id: cityId },
+        data: {
+          ...(nameAr ? { nameAr } : {}),
+          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          ...(dto.displayOrder !== undefined
+            ? { displayOrder: dto.displayOrder }
+            : {}),
+        },
+      });
+      // Store.city mirrors the city name for older clients.
+      if (nameAr) {
+        await tx.store.updateMany({ where: { cityId }, data: { city: nameAr } });
+      }
+      return updated;
+    });
+    return presentCity(city);
+  }
+
+  /// A name clashes with another city of the same governorate when their
+  /// keys match (case, spacing, diacritics and alef/yaa/taa-marbuta variants
+  /// are ignored), so a spelling variant cannot become a second city.
+  private async assertCityNameFree(
+    governorateId: string,
+    nameAr: string,
+    exceptCityId?: string,
+  ) {
+    const key = cityNameKey(nameAr);
+    if (key.length < 2) {
+      throw new BadRequestException("City name is too short.");
+    }
+    const cities = await this.prisma.city.findMany({ where: { governorateId } });
+    const clash = cities.find(
+      (c) => c.id !== exceptCityId && cityNameKey(c.nameAr) === key,
+    );
+    if (clash) {
+      throw new ConflictException(
+        `A similar city already exists in this governorate: ${clash.nameAr}`,
+      );
+    }
+  }
+
+  /// Resolves the target city of a store write. [cityId] is authoritative and
+  /// must belong to [governorateId]. Older admin builds only send the
+  /// free-text [city]: it must match an EXISTING city of the governorate (same
+  /// name key). A city is never created from free text - an unknown name is
+  /// rejected so a typo cannot add a city; cities are added explicitly
+  /// through POST /admin/cities.
+  private async resolveStoreCity(
+    tx: Prisma.TransactionClient,
+    governorateId: string,
+    cityId: string | undefined,
+    cityName: string | undefined,
+  ) {
+    if (cityId) {
+      const city = await tx.city.findUnique({ where: { id: cityId } });
+      if (!city) throw new BadRequestException("City was not found.");
+      if (city.governorateId !== governorateId) {
+        throw new BadRequestException(
+          "City does not belong to the selected governorate.",
+        );
+      }
+      return city;
+    }
+    const name = cityName ? normalizeCityName(cityName) : "";
+    if (!name) throw new BadRequestException("A city is required.");
+    const key = cityNameKey(name);
+    const cities = await tx.city.findMany({ where: { governorateId } });
+    const matches = cities.filter((c) => cityNameKey(c.nameAr) === key);
+    if (matches.length !== 1) {
+      throw new BadRequestException(
+        matches.length === 0
+          ? "Unknown city. Choose an existing city or add it first."
+          : "City name is ambiguous. Choose the city from the list.",
+      );
+    }
+    return matches[0];
+  }
+
+  private async lockCities(tx: Prisma.TransactionClient, ids: string[]) {
+    // Fixed order so two concurrent moves between the same cities can't deadlock.
+    for (const id of [...new Set(ids)].sort()) {
+      await tx.$queryRaw`SELECT "id" FROM "City" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    }
+  }
+
+  private activeSiblings(
+    tx: Prisma.TransactionClient,
+    cityId: string,
+    exceptStoreId?: string,
+  ) {
+    return tx.store.findMany({
+      where: {
+        cityId,
+        isActive: true,
+        ...(exceptStoreId ? { id: { not: exceptStoreId } } : {}),
+      },
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+      select: { id: true, displayOrder: true },
+    });
+  }
+
+  /// Writes 1..n positions for [orderedIds], touching only rows that change.
+  private async applyPositions(
+    tx: Prisma.TransactionClient,
+    orderedIds: string[],
+    current: Map<string, number>,
+  ) {
+    for (const change of positionChanges(orderedIds, current)) {
+      await tx.store.update({
+        where: { id: change.id },
+        data: { displayOrder: change.displayOrder },
+      });
+    }
+  }
+
+  async createStore(dto: CreateStoreDto) {
+    const store = await this.prisma.$transaction(
+      async (tx) => {
+        const city = await this.resolveStoreCity(
+          tx,
+          dto.governorateId,
+          dto.cityId,
+          dto.city,
+        );
+        await this.lockCities(tx, [city.id]);
+        const active = dto.isActive ?? true;
+        if (active) {
+          if (!city.isActive) {
+            throw new BadRequestException("City is not active.");
+          }
+          await this.assertExclusiveStoreSlot(tx, city.id, dto.category);
+        }
+        const siblings = active ? await this.activeSiblings(tx, city.id) : [];
+        const created = await tx.store.create({
+          data: {
+            name: dto.name.trim(),
+            category: dto.category.trim(),
+            city: city.nameAr,
+            cityId: city.id,
+            commissionRate: new Prisma.Decimal(dto.commissionRate),
+            description: dto.description?.trim() ?? "",
+            location: dto.location?.trim() ?? "",
+            imageUrl: dto.imageUrl?.trim() || null,
+            iconSeed: dto.iconSeed ?? 0,
+            isActive: active,
+            governorateId: dto.governorateId,
+            displayOrder: 0,
+          },
+        });
+        if (!active) return created;
+        const order = insertAtPosition(
+          siblings.map((s) => s.id),
+          created.id,
+          dto.displayOrder,
+        );
+        const positions = new Map(siblings.map((s) => [s.id, s.displayOrder]));
+        positions.set(created.id, 0);
+        await this.applyPositions(tx, order, positions);
+        return { ...created, displayOrder: order.indexOf(created.id) + 1 };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
     return presentStore(store);
   }
 
   async updateStore(storeId: string, dto: UpdateStoreDto) {
-    const current = await this.prisma.store.findUnique({
+    const preview = await this.prisma.store.findUnique({
       where: { id: storeId },
     });
-    if (!current) throw new NotFoundException("Store was not found.");
-    const nextCity = dto.city?.trim() ?? current.city;
-    const nextCategory = dto.category?.trim() ?? current.category;
-    const nextActive = dto.isActive ?? current.isActive;
-    if (nextActive)
-      await this.assertExclusiveStoreSlot(nextCity, nextCategory, storeId);
+    if (!preview) throw new NotFoundException("Store was not found.");
 
-    const store = await this.prisma.store.update({
-      where: { id: storeId },
-      data: {
-        ...(dto.name ? { name: dto.name.trim() } : {}),
-        ...(dto.category ? { category: nextCategory } : {}),
-        ...(dto.city ? { city: nextCity } : {}),
-        ...(dto.commissionRate !== undefined
-          ? { commissionRate: new Prisma.Decimal(dto.commissionRate) }
-          : {}),
-        ...(dto.description !== undefined
-          ? { description: dto.description.trim() }
-          : {}),
-        ...(dto.location !== undefined
-          ? { location: dto.location.trim() }
-          : {}),
-        ...(dto.imageUrl !== undefined
-          ? { imageUrl: dto.imageUrl.trim() || null }
-          : {}),
-        ...(dto.iconSeed !== undefined ? { iconSeed: dto.iconSeed } : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-        ...(dto.governorateId !== undefined
-          ? { governorateId: dto.governorateId }
-          : {}),
+    const store = await this.prisma.$transaction(
+      async (tx) => {
+        const nextGovernorateId = dto.governorateId ?? preview.governorateId;
+        const governorateChanged = nextGovernorateId !== preview.governorateId;
+        const cityGiven = dto.cityId !== undefined || dto.city !== undefined;
+        if (governorateChanged && !cityGiven) {
+          throw new BadRequestException("Choose a city of the new governorate.");
+        }
+        let target: { id: string; nameAr: string; isActive: boolean } | null =
+          null;
+        if (cityGiven) {
+          target = await this.resolveStoreCity(
+            tx,
+            nextGovernorateId,
+            dto.cityId,
+            dto.city,
+          );
+        } else if (preview.cityId) {
+          target = await tx.city.findUnique({ where: { id: preview.cityId } });
+        }
+        await this.lockCities(
+          tx,
+          [target?.id, preview.cityId].filter((id): id is string => !!id),
+        );
+
+        const current = await tx.store.findUnique({ where: { id: storeId } });
+        if (!current) throw new NotFoundException("Store was not found.");
+        const nextCategory = dto.category?.trim() || current.category;
+        const nextActive = dto.isActive ?? current.isActive;
+        const sameCity = !!target && target.id === current.cityId;
+
+        if (nextActive) {
+          if (!target) throw new BadRequestException("A city is required.");
+          if (!target.isActive) {
+            throw new BadRequestException("City is not active.");
+          }
+          await this.assertExclusiveStoreSlot(
+            tx,
+            target.id,
+            nextCategory,
+            storeId,
+          );
+        }
+
+        // The city the store leaves (move or deactivation) closes its gap.
+        if (current.cityId && current.isActive && (!sameCity || !nextActive)) {
+          const left = await this.activeSiblings(tx, current.cityId, storeId);
+          await this.applyPositions(
+            tx,
+            left.map((s) => s.id),
+            new Map(left.map((s) => [s.id, s.displayOrder])),
+          );
+        }
+
+        let displayOrder = 0;
+        if (nextActive && target) {
+          const siblings = await this.activeSiblings(tx, target.id, storeId);
+          const requested =
+            dto.displayOrder ??
+            (sameCity && current.isActive ? current.displayOrder : undefined);
+          const order = insertAtPosition(
+            siblings.map((s) => s.id),
+            storeId,
+            requested,
+          );
+          const positions = new Map(
+            siblings.map((s) => [s.id, s.displayOrder]),
+          );
+          positions.set(storeId, -1); // written with the store update below
+          await this.applyPositions(tx, order, positions);
+          displayOrder = order.indexOf(storeId) + 1;
+        }
+
+        return tx.store.update({
+          where: { id: storeId },
+          data: {
+            ...(dto.name ? { name: dto.name.trim() } : {}),
+            ...(dto.category ? { category: nextCategory } : {}),
+            ...(target ? { city: target.nameAr, cityId: target.id } : {}),
+            ...(dto.commissionRate !== undefined
+              ? { commissionRate: new Prisma.Decimal(dto.commissionRate) }
+              : {}),
+            ...(dto.description !== undefined
+              ? { description: dto.description.trim() }
+              : {}),
+            ...(dto.location !== undefined
+              ? { location: dto.location.trim() }
+              : {}),
+            ...(dto.imageUrl !== undefined
+              ? { imageUrl: dto.imageUrl.trim() || null }
+              : {}),
+            ...(dto.iconSeed !== undefined ? { iconSeed: dto.iconSeed } : {}),
+            ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+            ...(dto.governorateId !== undefined
+              ? { governorateId: dto.governorateId }
+              : {}),
+            displayOrder,
+          },
+        });
       },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
     return presentStore(store);
   }
 
@@ -669,16 +942,28 @@ export class AdminService {
     });
     if (!current) throw new NotFoundException("Store was not found.");
 
-    await this.prisma.$transaction([
-      this.prisma.store.update({
-        where: { id: storeId },
-        data: { isActive: false },
-      }),
-      this.prisma.merchantAccount.updateMany({
-        where: { storeId },
-        data: { isActive: false },
-      }),
-    ]);
+    await this.prisma.$transaction(
+      async (tx) => {
+        if (current.cityId) await this.lockCities(tx, [current.cityId]);
+        await tx.store.update({
+          where: { id: storeId },
+          data: { isActive: false, displayOrder: 0 },
+        });
+        await tx.merchantAccount.updateMany({
+          where: { storeId },
+          data: { isActive: false },
+        });
+        if (current.cityId && current.isActive) {
+          const left = await this.activeSiblings(tx, current.cityId, storeId);
+          await this.applyPositions(
+            tx,
+            left.map((s) => s.id),
+            new Map(left.map((s) => [s.id, s.displayOrder])),
+          );
+        }
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
 
     return { success: true };
   }
@@ -1326,14 +1611,17 @@ export class AdminService {
     return presentCustomer(updated);
   }
 
+  /// One active store per city and category. The city is identified by id,
+  /// so the same city name in two governorates never collides.
   private async assertExclusiveStoreSlot(
-    city: string,
+    tx: Prisma.TransactionClient,
+    cityId: string,
     category: string,
     exceptStoreId?: string,
   ): Promise<void> {
-    const existing = await this.prisma.store.findFirst({
+    const existing = await tx.store.findFirst({
       where: {
-        city: { equals: city.trim(), mode: "insensitive" },
+        cityId,
         category: { equals: category.trim(), mode: "insensitive" },
         isActive: true,
         ...(exceptStoreId ? { id: { not: exceptStoreId } } : {}),

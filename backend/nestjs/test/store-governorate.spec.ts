@@ -1,5 +1,6 @@
 import { AdminService } from "../src/admin/admin.service";
 import { StoresService } from "../src/stores/stores.service";
+import { fakeCityPrisma, makeCity, makeStore } from "./support/fake-city-prisma";
 
 /**
  * Covers Store <-> Governorate filtering (Store.governorateId -> Governorate.id,
@@ -118,42 +119,45 @@ describe("Store <-> Governorate filtering", () => {
   // required, non-optional field — verified here at the service level: the
   // provided governorateId is always persisted, never silently dropped).
   it("createStore persists the provided governorateId", async () => {
-    const prisma = fakePrisma({
-      store: {
-        create: jest.fn().mockResolvedValue({ ...idlibStore }),
-        findMany: jest.fn(),
-      },
-    });
+    const city = makeCity({ governorateId: IDLIB_ID, nameAr: "Idlib" });
+    const prisma = fakeCityPrisma({ cities: [city] });
     const admin = new AdminService(prisma as any, {} as any, {} as any);
-    jest.spyOn(admin as any, "assertExclusiveStoreSlot").mockResolvedValue(undefined);
 
-    await admin.createStore({
+    const out = await admin.createStore({
       name: "Idlib Store",
       category: "restaurants",
-      city: "Idlib",
+      cityId: city.id,
       commissionRate: 5,
       governorateId: IDLIB_ID,
     } as any);
 
-    const createArgs = (prisma.store as any).create.mock.calls[0][0];
-    expect(createArgs.data.governorateId).toBe(IDLIB_ID);
+    expect(out.governorateId).toBe(IDLIB_ID);
+    expect(prisma.state.stores[0].governorateId).toBe(IDLIB_ID);
   });
 
-  // 8. Store update can change governorateId.
+  // 8. Store update can change governorateId (with a city of the new one).
   it("updateStore persists a changed governorateId", async () => {
-    const prisma = fakePrisma({
-      store: {
-        findUnique: jest.fn().mockResolvedValue(idlibStore),
-        update: jest.fn().mockResolvedValue({ ...idlibStore, governorateId: ALEPPO_ID }),
-      },
+    const idlibCity = makeCity({ governorateId: IDLIB_ID, nameAr: "Idlib" });
+    const aleppoCity = makeCity({ governorateId: ALEPPO_ID, nameAr: "Aleppo" });
+    const store = makeStore({
+      city: "Idlib",
+      cityId: idlibCity.id,
+      governorateId: IDLIB_ID,
+      displayOrder: 1,
+    });
+    const prisma = fakeCityPrisma({
+      cities: [idlibCity, aleppoCity],
+      stores: [store],
     });
     const admin = new AdminService(prisma as any, {} as any, {} as any);
-    jest.spyOn(admin as any, "assertExclusiveStoreSlot").mockResolvedValue(undefined);
 
-    await admin.updateStore(idlibStore.id, { governorateId: ALEPPO_ID } as any);
+    const out = await admin.updateStore(store.id, {
+      governorateId: ALEPPO_ID,
+      cityId: aleppoCity.id,
+    } as any);
 
-    const updateArgs = (prisma.store as any).update.mock.calls[0][0];
-    expect(updateArgs.data.governorateId).toBe(ALEPPO_ID);
+    expect(out.governorateId).toBe(ALEPPO_ID);
+    expect(out.cityId).toBe(aleppoCity.id);
   });
 
   // Sanity: omitting governorateId from a query does not filter at all

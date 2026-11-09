@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 
 export class ListStoresDto {
   @IsOptional()
@@ -14,4 +14,8 @@ export class ListStoresDto {
   @IsOptional()
   @IsString()
   governorateId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
 }

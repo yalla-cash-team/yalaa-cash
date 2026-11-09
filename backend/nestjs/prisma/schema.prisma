@@ -158,6 +158,8 @@ model CustomerProfile {
   name          String
   governorate   String
   governorateId String?  @db.Uuid
+  /// Customer's selected city (always inside [governorateId]); null until chosen.
+  cityId        String?  @db.Uuid
   pointsBalance BigInt   @default(0)
   /// Earned SYP not yet converted into whole points; carried into the next reward.
   pointRemainderSyp Decimal @default(0) @db.Decimal(12, 4)
@@ -165,6 +167,7 @@ model CustomerProfile {
   updatedAt     DateTime @updatedAt
 
   governorateRecord Governorate? @relation(fields: [governorateId], references: [id], onDelete: SetNull)
+  cityRecord        City?        @relation(fields: [cityId], references: [id], onDelete: SetNull)
 
   transactions           LoyaltyTransaction[]
   shareRewardClaim       ShareRewardClaim?
@@ -174,6 +177,7 @@ model CustomerProfile {
 
   @@index([governorate])
   @@index([governorateId])
+  @@index([cityId])
 }
 
 model Governorate {
@@ -187,8 +191,29 @@ model Governorate {
   customers CustomerProfile[]
   banners   Banner[]
   stores    Store[]
+  cities    City[]
 
   @@index([isActive, displayOrder])
+}
+
+/// A city inside one governorate. The (governorateId, nameAr) pair is unique,
+/// so a city name is unambiguous within its governorate. Cities are only ever
+/// deactivated, never deleted.
+model City {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  governorateId String   @db.Uuid
+  nameAr        String
+  isActive      Boolean  @default(true)
+  displayOrder  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  governorate Governorate       @relation(fields: [governorateId], references: [id])
+  stores      Store[]
+  customers   CustomerProfile[]
+
+  @@unique([governorateId, nameAr])
+  @@index([governorateId, isActive, displayOrder])
 }
 
 /// Uploaded banner image bytes (same storage approach as store logos).
@@ -239,6 +264,13 @@ model Store {
   isActive       Boolean  @default(true)
   governorateId  String   @db.Uuid
   governorate    Governorate @relation(fields: [governorateId], references: [id])
+  /// Structured city (inside [governorate]). [city] above is kept in sync as
+  /// its display name for older clients and the exclusivity history.
+  cityId         String?  @db.Uuid
+  cityRecord     City?    @relation(fields: [cityId], references: [id])
+  /// 1-based position among the ACTIVE stores of the same city; 0 when the
+  /// store is inactive. Maintained by the admin service in one transaction.
+  displayOrder   Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -251,6 +283,7 @@ model Store {
   @@index([city, category])
   @@index([isActive])
   @@index([governorateId, isActive])
+  @@index([cityId, isActive, displayOrder])
 }
 
 /// Store logo image bytes, kept out of the Store row so store lists stay light.

@@ -121,7 +121,21 @@ async function main(): Promise<void> {
     },
   ];
 
-  for (const store of stores) {
+  // Stores belong to a city (unique per governorate) and hold a 1-based
+  // display position inside it, matching what the admin service maintains.
+  const city = await prisma.city.upsert({
+    where: {
+      governorateId_nameAr: {
+        governorateId: idlibGovernorateId,
+        nameAr: "دمشق",
+      },
+    },
+    update: {},
+    create: { governorateId: idlibGovernorateId, nameAr: "دمشق" },
+  });
+
+  for (const [index, base] of stores.entries()) {
+    const store = { ...base, cityId: city.id, displayOrder: index + 1 };
     await prisma.store.upsert({
       where: { id: store.id },
       update: store,

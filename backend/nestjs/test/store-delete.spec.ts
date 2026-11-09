@@ -54,7 +54,9 @@ function fakeAdminPrisma(overrides: Record<string, unknown> = {}) {
   };
   // Mirrors AdminService.deleteStore()'s array-style $transaction([...]) —
   // each element is already an invoked (Promise-returning) Prisma call.
-  prisma.$transaction = jest.fn((ops: Promise<unknown>[]) => Promise.all(ops));
+  prisma.$transaction = jest.fn((arg: any) =>
+    typeof arg === "function" ? arg(prisma) : Promise.all(arg),
+  );
   return prisma;
 }
 
@@ -68,7 +70,7 @@ describe("Delete Store (soft delete)", () => {
     expect(result).toEqual({ success: true });
     expect(prisma.store.update).toHaveBeenCalledWith({
       where: { id: STORE_ID },
-      data: { isActive: false },
+      data: { isActive: false, displayOrder: 0 },
     });
   });
 
@@ -143,11 +145,11 @@ describe("Delete Store (soft delete)", () => {
     // never a throw, never a duplicate/partial state.
     expect(prisma.store.update).toHaveBeenNthCalledWith(1, {
       where: { id: STORE_ID },
-      data: { isActive: false },
+      data: { isActive: false, displayOrder: 0 },
     });
     expect(prisma.store.update).toHaveBeenNthCalledWith(2, {
       where: { id: STORE_ID },
-      data: { isActive: false },
+      data: { isActive: false, displayOrder: 0 },
     });
   });
 

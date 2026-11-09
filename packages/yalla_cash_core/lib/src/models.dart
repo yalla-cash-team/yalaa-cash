@@ -13,6 +13,7 @@ class Customer {
     required this.createdAt,
     this.phone,
     this.governorateId,
+    this.cityId,
     this.authMethod = AuthMethod.phone,
   });
 
@@ -20,13 +21,21 @@ class Customer {
   final String name;
   final String? phone;
   final String? governorateId;
+
+  /// The city chosen inside [governorateId]; null until the customer picks one.
+  final String? cityId;
   final AuthMethod authMethod;
   final String governorate;
   final int pointsBalance;
   final DateTime createdAt;
 
-  Customer copyWith(
-          {int? pointsBalance, String? governorateId, String? governorate}) =>
+  Customer copyWith({
+    int? pointsBalance,
+    String? governorateId,
+    String? governorate,
+    String? cityId,
+    bool clearCity = false,
+  }) =>
       Customer(
         id: id,
         name: name,
@@ -34,8 +43,34 @@ class Customer {
         authMethod: authMethod,
         governorate: governorate ?? this.governorate,
         governorateId: governorateId ?? this.governorateId,
+        cityId: clearCity ? null : (cityId ?? this.cityId),
         pointsBalance: pointsBalance ?? this.pointsBalance,
         createdAt: createdAt,
+      );
+}
+
+/// A city inside one governorate. Unique by (governorateId, nameAr).
+class City {
+  const City({
+    required this.id,
+    required this.governorateId,
+    required this.nameAr,
+    this.isActive = true,
+    this.displayOrder = 0,
+  });
+
+  final String id;
+  final String governorateId;
+  final String nameAr;
+  final bool isActive;
+  final int displayOrder;
+
+  City copyWith({String? nameAr, bool? isActive, int? displayOrder}) => City(
+        id: id,
+        governorateId: governorateId,
+        nameAr: nameAr ?? this.nameAr,
+        isActive: isActive ?? this.isActive,
+        displayOrder: displayOrder ?? this.displayOrder,
       );
 }
 
@@ -282,6 +317,8 @@ class PartnerStore {
     required this.location,
     required this.iconSeed,
     required this.governorateId,
+    this.cityId,
+    this.displayOrder = 0,
     this.isActive = true,
     this.logoUrl,
   });
@@ -294,6 +331,14 @@ class PartnerStore {
   final String location;
   final int iconSeed;
   final String governorateId;
+
+  /// The store's city (inside [governorateId]); null only for legacy stores
+  /// whose free-text city could not be matched.
+  final String? cityId;
+
+  /// 1-based position among the city's active stores; 0 when inactive.
+  /// When sent to the server, a value <= 0 means "put it last".
+  final int displayOrder;
   final bool isActive;
 
   /// Absolute URL of the uploaded logo, or null when the store has none.
@@ -307,11 +352,15 @@ class PartnerStore {
     String? location,
     int? iconSeed,
     String? governorateId,
+    String? cityId,
+    int? displayOrder,
     bool? isActive,
   }) =>
       PartnerStore(
         id: id,
         logoUrl: logoUrl,
+        cityId: cityId ?? this.cityId,
+        displayOrder: displayOrder ?? this.displayOrder,
         name: name ?? this.name,
         category: category ?? this.category,
         commissionRate: commissionRate ?? this.commissionRate,

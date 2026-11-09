@@ -602,6 +602,22 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
     }
   }
 
+  /// Saves the customer's city and reloads the store list for it. Shares the
+  /// governorate in-flight guard so the two pickers can't race each other.
+  Future<void> updateCity(String cityId) async {
+    if (_changingGovernorate) return;
+    _changingGovernorate = true;
+    try {
+      await _run(() async {
+        final customer = await _repository.updateCustomerCity(cityId);
+        emit(state.copyWith(customer: customer, qrToken: null));
+        await refresh();
+      });
+    } finally {
+      _changingGovernorate = false;
+    }
+  }
+
   Future<void> issueQrToken() async {
     await _run(() async {
       final qr = await _repository.issueCustomerQrToken();
@@ -659,7 +675,8 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
         _repository.getCustomerProfile(),
         _repository.getCustomerPoints(),
         _repository.listActiveStores(
-            governorateId: state.customer?.governorateId),
+            governorateId: state.customer?.governorateId,
+            cityId: state.customer?.cityId),
         _repository.listCustomerTransactions(),
         _repository.listDigitalProducts(),
         _repository.listCustomerCashRequests(),
@@ -678,7 +695,8 @@ class CustomerAppCubit extends Cubit<CustomerAppState> {
       final results = await Future.wait<Object>([
         _repository.getCustomerPoints(),
         _repository.listActiveStores(
-            governorateId: state.customer?.governorateId),
+            governorateId: state.customer?.governorateId,
+            cityId: state.customer?.cityId),
         _repository.listCustomerTransactions(),
         _repository.listDigitalProducts(),
         _repository.listCustomerCashRequests(),

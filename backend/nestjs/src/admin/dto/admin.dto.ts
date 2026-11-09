@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -55,10 +56,23 @@ export class CreateStoreDto {
   @MaxLength(80)
   category!: string;
 
+  // Legacy free-text city (older admin builds). Prefer [cityId].
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(80)
-  city!: string;
+  city?: string;
+
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
+
+  // 1-based position in the city's list; omitted = end of the list.
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  displayOrder?: number;
 
   @Transform(({ value }) => Number(value))
   @IsNumber()
@@ -112,6 +126,16 @@ export class UpdateStoreDto {
   @MinLength(2)
   @MaxLength(80)
   city?: string;
+
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  displayOrder?: number;
 
   @IsOptional()
   @Transform(({ value }) => Number(value))
@@ -482,4 +506,40 @@ export class UpdateBannerDto {
   @IsOptional()
   @IsString()
   governorateId?: string;
+}
+
+export class CreateCityDto {
+  @IsUUID()
+  governorateId!: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  nameAr!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  displayOrder?: number;
+}
+
+export class UpdateCityDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  nameAr?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  displayOrder?: number;
 }

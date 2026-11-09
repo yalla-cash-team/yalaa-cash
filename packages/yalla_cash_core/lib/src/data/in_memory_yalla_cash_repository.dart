@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:yalla_cash_core/src/data/auth_token_store.dart';
+import 'package:yalla_cash_core/src/city_names.dart';
 import 'package:yalla_cash_core/src/core/failure.dart';
 import 'package:yalla_cash_core/src/customer_notifications.dart';
 import 'package:yalla_cash_core/src/domain/yalla_cash_repository.dart';
@@ -217,6 +218,87 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
   }
 
   @override
+  Future<List<City>> listActiveCities({String? governorateId}) async =>
+      _store.cities
+          .where((c) =>
+              c.isActive &&
+              (governorateId == null || c.governorateId == governorateId))
+          .toList()
+        ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+
+  @override
+  Future<Customer> updateCustomerCity(String cityId) async {
+    _store.updateCustomerCity(cityId);
+    return _store.currentCustomer!;
+  }
+
+  @override
+  Future<List<City>> listAdminCities({String? governorateId}) async => _store
+      .cities
+      .where((c) => governorateId == null || c.governorateId == governorateId)
+      .toList(growable: false);
+
+  @override
+  Future<City> createCity(City city) async {
+    final nameAr = normalizeCityName(city.nameAr);
+    if (cityNameKey(nameAr).length < 2) {
+      throw StateError('City name is too short.');
+    }
+    final clash = findCityNameClash<City>(
+      _store.cities.where((c) => c.governorateId == city.governorateId),
+      nameAr,
+      nameOf: (c) => c.nameAr,
+      idOf: (c) => c.id,
+    );
+    if (clash != null) {
+      throw StateError('A similar city already exists: ${clash.nameAr}');
+    }
+    final created = City(
+      id: 'city-${DateTime.now().microsecondsSinceEpoch}',
+      governorateId: city.governorateId,
+      nameAr: nameAr,
+      isActive: city.isActive,
+      displayOrder: city.displayOrder,
+    );
+    _store.addCity(created);
+    return created;
+  }
+
+  /// Rename / reorder / (de)activate. A city never changes governorate, a
+  /// new name must not collide with a sibling city, and a city with active
+  /// stores cannot be deactivated (no store is ever orphaned).
+  @override
+  Future<City> updateCity(City city) async {
+    final current = _store.cities.firstWhere((c) => c.id == city.id,
+        orElse: () => throw StateError('City was not found.'));
+    final nameAr = normalizeCityName(city.nameAr);
+    if (nameAr != current.nameAr) {
+      final clash = findCityNameClash<City>(
+        _store.cities.where((c) => c.governorateId == current.governorateId),
+        nameAr,
+        nameOf: (c) => c.nameAr,
+        idOf: (c) => c.id,
+        exceptId: current.id,
+      );
+      if (clash != null) {
+        throw StateError('A similar city already exists: ${clash.nameAr}');
+      }
+    }
+    if (!city.isActive &&
+        current.isActive &&
+        _store.stores.any((s) => s.cityId == current.id && s.isActive)) {
+      throw StateError('The city still has active stores.');
+    }
+    final saved = current.copyWith(
+      nameAr: nameAr,
+      isActive: city.isActive,
+      displayOrder: city.displayOrder,
+    );
+    _store.updateCity(saved);
+    return saved;
+  }
+
+  @override
   Future<Customer> updateCustomerGovernorate(String governorateId) async {
     _store.updateCustomerGovernorate(governorateId);
     return _store.currentCustomer!;
@@ -245,13 +327,23 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
 
   @override
   Future<List<PartnerStore>> listActiveStores(
-          {String? city, String? category, String? governorateId}) async =>
-      _store.stores
+          {String? city,
+          String? category,
+          String? governorateId,
+          String? cityId}) async =>
+      (_store.stores
           .where((store) =>
               store.isActive &&
               (category == null || store.category == category) &&
-              (governorateId == null || store.governorateId == governorateId))
-          .toList(growable: false);
+              (governorateId == null || store.governorateId == governorateId) &&
+              (cityId == null || store.cityId == cityId))
+          .toList()
+        ..sort((a, b) {
+          final byOrder = a.displayOrder.compareTo(b.displayOrder);
+          if (byOrder != 0) return byOrder;
+          final byName = a.name.compareTo(b.name);
+          return byName != 0 ? byName : a.id.compareTo(b.id);
+        }));
 
   @override
   Future<List<LoyaltyTransaction>> listCustomerTransactions(
@@ -554,14 +646,14 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
 
   @override
   Future<PartnerStore> createStore(PartnerStore store) async {
-    _store.addPartnerStore();
-    return _store.stores.last;
+    return _store.saveStore(store.copyWith(
+      cityId: store.cityId,
+    ));
   }
 
   @override
   Future<PartnerStore> updateStore(PartnerStore store) async {
-    _store.updatePartnerStore(store.id, store);
-    return store;
+    return _store.saveStore(store);
   }
 
   @override
@@ -690,7 +782,8 @@ class InMemoryYallaCashRepository implements YallaCashRepository {
 
   // The in-memory demo has no settlement ledger, so monthly runs are empty.
   @override
-  Future<MonthlySettlementPreview> previewMonthlySettlement(String month) async =>
+  Future<MonthlySettlementPreview> previewMonthlySettlement(
+          String month) async =>
       MonthlySettlementPreview(
         month: month,
         merchants: const [],

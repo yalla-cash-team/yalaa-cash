@@ -2,6 +2,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -29,6 +30,11 @@ export class UpdateCustomerProfileDto {
 export class UpdateCustomerGovernorateDto {
   @IsString()
   governorateId!: string;
+}
+
+export class UpdateCustomerCityDto {
+  @IsUUID()
+  cityId!: string;
 }
 
 export class RequestCashRedemptionDto {
