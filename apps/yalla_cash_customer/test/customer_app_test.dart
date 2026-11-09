@@ -45,6 +45,11 @@ void main() {
 
     await tester.tap(find.byKey(const Key('demo-customer-login')));
     await tester.pumpAndSettle();
+
+    // Idlib has cities, so step 2 (city) comes before the shell.
+    expect(find.byType(CitySelectionScreen), findsOneWidget);
+    await tester.tap(find.byKey(const Key('city-city-idlib')));
+    await tester.pumpAndSettle();
     _expectOnlyNetworkImageFailures(tester);
 
     expect(find.byType(CustomerShell), findsOneWidget);

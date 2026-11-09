@@ -292,17 +292,10 @@ void main() {
         expect(r.right, lessThanOrEqualTo(logo.left), reason: s);
         expect(r.left, greaterThanOrEqualTo(arrow.right), reason: s);
       }
-      // RTL: name and badge start from the same right-hand edge (the badge
-      // text sits inside its pill padding and icon).
+      // RTL: name and partner line start from the same right-hand edge.
       final nameRight = tester.getRect(find.text('مطعم الأصالة')).right;
-      final pillRight = tester
-          .getRect(find
-              .ancestor(
-                  of: find.text(_badgeText),
-                  matching: find.byType(DecoratedBox))
-              .first)
-          .right;
-      expect(pillRight, closeTo(nameRight, 1));
+      final labelRight = tester.getRect(find.text(_badgeText)).right;
+      expect(labelRight, closeTo(nameRight, 1));
     });
   });
 
@@ -536,12 +529,19 @@ void main() {
       expect(text.data, 'شريك حصري لدى يلا كاش');
       expect(text.overflow, isNot(TextOverflow.ellipsis));
       expect(text.style?.fontSize, greaterThanOrEqualTo(12));
-      expect(text.style?.fontWeight, FontWeight.w800);
+      expect(text.style?.fontWeight, FontWeight.w500);
+      // Plain text: no medal icon and no pill/border around it.
       expect(
           find.descendant(
               of: _storeCard,
               matching: find.byIcon(Icons.workspace_premium_rounded)),
-          findsOneWidget);
+          findsNothing);
+      expect(
+          find.descendant(
+              of: find.ancestor(
+                  of: find.text(_badgeText), matching: find.byType(FittedBox)),
+              matching: find.byType(DecoratedBox)),
+          findsNothing);
       // Fully inside the card even at 320dp with 2x text.
       final card = tester.getRect(_storeCard);
       final badge = tester.getRect(find.text(_badgeText));
@@ -550,24 +550,16 @@ void main() {
     });
 
     for (final b in Brightness.values) {
-      testWidgets('$b: gold ink keeps >= 4.5:1 on the badge', (tester) async {
+      testWidgets('$b: muted partner text keeps >= 4.5:1 on the card',
+          (tester) async {
         await _pumpHome(tester, stores: [_store()], brightness: b);
         final ink = tester.widget<Text>(find.text(_badgeText)).style!.color!;
-        final pill = (tester
-                .widget<DecoratedBox>(find
-                    .ancestor(
-                        of: find.text(_badgeText),
-                        matching: find.byType(DecoratedBox))
-                    .first)
-                .decoration as BoxDecoration)
-            .color!;
         final ctx = tester.element(find.text(_badgeText));
         final surface = Theme.of(ctx).cardTheme.color!;
-        final bg = Color.alphaBlend(pill, surface);
-        final la = ink.computeLuminance(), lb = bg.computeLuminance();
+        final la = ink.computeLuminance(), lb = surface.computeLuminance();
         final ratio = ((la > lb ? la : lb) + .05) / ((la > lb ? lb : la) + .05);
         // ignore: avoid_print
-        print('$b badge contrast ${ratio.toStringAsFixed(2)}');
+        print('$b partner text contrast ${ratio.toStringAsFixed(2)}');
         expect(ratio, greaterThanOrEqualTo(4.5));
       });
     }
