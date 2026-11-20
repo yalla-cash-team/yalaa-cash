@@ -31,8 +31,11 @@ export class MerchantController {
   }
 
   @Post("qr/resolve")
-  resolveCustomerQr(@Body() dto: ResolveCustomerQrDto) {
-    return this.merchant.resolveCustomerQr(dto);
+  resolveCustomerQr(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ResolveCustomerQrDto,
+  ) {
+    return this.merchant.resolveCustomerQr(user.id, dto);
   }
 
   @Post("invoices")

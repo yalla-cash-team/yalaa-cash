@@ -61,19 +61,30 @@ export class CustomerService {
     return presentCustomer(customer);
   }
 
+  /// The phone number is the OTP login identifier, so it can only be bound
+  /// through OTP verification — never through a profile update. For
+  /// compatibility an unchanged phone may still be sent. Any other value is
+  /// refused with one fixed response, before any lookup of the requested
+  /// number, so the endpoint cannot reveal whether a number is registered.
   async updateProfile(userId: string, dto: UpdateCustomerProfileDto) {
+    if (dto.phone !== undefined) {
+      const current = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { phone: true },
+      });
+      const requested = dto.phone.replace(/[^\d+]/g, "");
+      if (!current?.phone || requested !== current.phone) {
+        throw new BadRequestException(
+          "Phone number changes require verification.",
+        );
+      }
+    }
+
     const updated = await this.prisma.customerProfile.update({
       where: { userId },
       data: {
         name: dto.name.trim(),
         governorate: dto.governorate.trim(),
-        ...(dto.phone
-          ? {
-              user: {
-                update: { phone: dto.phone.replace(/[^\d+]/g, "") },
-              },
-            }
-          : {}),
       },
       include: { user: true },
     });

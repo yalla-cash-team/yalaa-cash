@@ -98,18 +98,22 @@ describe("AuthService customer registration", () => {
             codeHash: otpHash(PHONE, CODE),
             ...challenge,
           };
+    // verifyPhoneOtp now runs entirely inside one transaction holding the
+    // per-phone lock (see otp-abuse-limits.spec.ts for the limit tests).
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       user: {
         upsert: jest.fn().mockResolvedValue({ id: "user-1", role: "CUSTOMER" }),
       },
       customerProfile: { upsert: jest.fn().mockResolvedValue({}) },
-      otpChallenge: { update: jest.fn().mockResolvedValue({}) },
-    };
-    const prisma = {
       otpChallenge: {
         findUnique: jest.fn().mockResolvedValue(savedChallenge),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { attempts: null } }),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+    };
+    const prisma = {
       user: {
         upsert: jest.fn().mockResolvedValue({ id: "user-2", role: "CUSTOMER" }),
       },
@@ -180,11 +184,11 @@ describe("AuthService customer registration", () => {
   });
 
   it("keeps OTP checks unchanged: wrong code is rejected and counted", async () => {
-    const { service, prisma, tx } = setup();
+    const { service, tx } = setup();
     await expect(
       service.verifyPhoneOtp(verify({ code: "000000" })),
     ).rejects.toThrow("OTP code is incorrect.");
-    expect(prisma.otpChallenge.update).toHaveBeenCalledWith({
+    expect(tx.otpChallenge.update).toHaveBeenCalledWith({
       where: { id: "challenge-1" },
       data: { attempts: { increment: 1 } },
     });

@@ -83,7 +83,14 @@ export class MerchantService {
     };
   }
 
-  async resolveCustomerQr(dto: ResolveCustomerQrDto) {
+  /// Same access rule as every other merchant operation: the caller's
+  /// merchant account and its store must both be active. Checked before the
+  /// QR is even decoded, so a revoked merchant learns nothing.
+  async resolveCustomerQr(userId: string, dto: ResolveCustomerQrDto) {
+    const account = await this.getMerchantAccount(userId);
+    if (!account.store.isActive) {
+      throw new ForbiddenException("Store is not active.");
+    }
     const customerId = await this.customerIdFromQr(dto.payload);
     const customer = await this.prisma.customerProfile.findUnique({
       where: { userId: customerId },

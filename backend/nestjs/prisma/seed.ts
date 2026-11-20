@@ -5,8 +5,12 @@ import {
   UserRole,
 } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
+import { assertSeedAllowed } from "./seed-guard";
 
+// Constructing the client loads .env into process.env but does not connect;
+// the guard runs before any query. A missing DATABASE_URL is refused.
 const prisma = new PrismaClient();
+assertSeedAllowed(process.env);
 
 async function main(): Promise<void> {
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@yallacash.app";
