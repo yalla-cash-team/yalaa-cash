@@ -104,8 +104,16 @@ void main() {
     return appCubit;
   }
 
+  // Premium redesign (Phase 4/6): offer images decode at the card's width,
+  // so the NetworkImage is wrapped in a ResizeImage.
+  NetworkImage? networkOf(ImageProvider provider) => switch (provider) {
+        NetworkImage() => provider,
+        ResizeImage(:final imageProvider) when imageProvider is NetworkImage =>
+          imageProvider,
+        _ => null,
+      };
   Finder networkImages() => find.byWidgetPredicate(
-      (widget) => widget is Image && widget.image is NetworkImage);
+      (widget) => widget is Image && networkOf(widget.image) != null);
 
   testWidgets('shows a real offer card, view-only, with the instruction',
       (tester) async {
@@ -312,7 +320,8 @@ void main() {
     }
 
     final image = tester.widget<Image>(networkImages());
-    expect((image.image as NetworkImage).url, url); // version kept
+    expect(networkOf(image.image)!.url, url); // version kept
+    expect(image.image, isA<ResizeImage>()); // decoded at display size
     expect(image.fit, BoxFit.contain);
     final size = tester.getSize(
         find.descendant(of: networkImages(), matching: find.byType(RawImage)));

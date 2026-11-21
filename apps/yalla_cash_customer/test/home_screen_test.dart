@@ -258,26 +258,22 @@ void main() {
       });
     }
 
-    testWidgets('gradient is the bright brand sky-blue → medium-blue range',
+    // Premium redesign: the hero moved from the bright sky-blue range to the
+    // deep navy → brand blue gradient (approved plan, Phase 3).
+    testWidgets('gradient is the deep navy → brand blue hero range',
         (tester) async {
       await _pump(tester, points: _points(1));
       final gradient = (tester
               .widget<DecoratedBox>(_balanceCard.first)
               .decoration as BoxDecoration)
           .gradient! as LinearGradient;
+      expect(gradient.colors, [YallaColors.navy, YallaColors.primaryStrong]);
       for (final c in gradient.colors) {
-        // Between the brand sky blue (primary) and primaryStrong.
+        // Blue-leaning, never brighter than the brand's strong blue.
         expect(c.b, greaterThan(c.r));
         expect(c.computeLuminance(),
-            lessThanOrEqualTo(YallaColors.primary.computeLuminance()));
-        expect(c.computeLuminance(),
-            greaterThanOrEqualTo(YallaColors.primaryStrong.computeLuminance()));
+            lessThanOrEqualTo(YallaColors.primaryStrong.computeLuminance()));
       }
-      // Noticeably brighter than the previous navy-deepened card.
-      final previousStart =
-          Color.lerp(YallaColors.primaryStrong, YallaColors.navy, .15)!;
-      expect(gradient.colors.first.computeLuminance(),
-          greaterThan(previousStart.computeLuminance() * 1.5));
     });
 
     testWidgets(

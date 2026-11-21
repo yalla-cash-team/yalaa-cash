@@ -1,9 +1,9 @@
 /// Customer-only theme overlay.
 ///
 /// Builds on the shared [buildYallaTheme] from `yalla_cash_core` without
-/// changing it, so the admin and merchant apps are unaffected. Phase 1 keeps
-/// the current look: it only adds the design-token extension and the page
-/// transitions. Screen-level styling comes in later phases.
+/// changing it, so the admin and merchant apps are unaffected. The overlay
+/// adds the customer's complete Almarai family, the premium palette
+/// ([YcColors]), surface tokens ([YcSurface]) and page transitions.
 library;
 
 // In this Flutter SDK the Cupertino page transition lives in the cupertino
@@ -13,16 +13,143 @@ import 'package:flutter/material.dart';
 import 'package:yalla_cash_core/yalla_cash_core.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
 
-/// The customer app's theme for [brightness].
+/// The customer app's only locale: Arabic (Syria). Drives Material strings
+/// (tooltips, text-selection toolbar), right-to-left layout and the engine's
+/// locale-aware text shaping.
+const Locale customerLocale = Locale('ar', 'SY');
+
+/// The customer light theme, built once and reused on every app rebuild.
+final ThemeData customerLightTheme = buildCustomerTheme(Brightness.light);
+
+/// The customer dark theme, built once and reused on every app rebuild.
+final ThemeData customerDarkTheme = buildCustomerTheme(Brightness.dark);
+
+/// The customer app's theme for [brightness]. Prefer the cached
+/// [customerLightTheme] / [customerDarkTheme] in the app itself.
 ThemeData buildCustomerTheme(Brightness brightness) {
   final base = buildYallaTheme(brightness);
+  final dark = brightness == Brightness.dark;
+  final palette = YcColors.forBrightness(brightness);
+  final page = customerPageColor(brightness);
+  final card = customerCardColor(brightness);
+  final scheme = base.colorScheme.copyWith(
+    surface: card,
+    onSurface: palette.ink,
+    onSurfaceVariant: palette.inkMuted,
+    surfaceContainerHighest:
+        dark ? const Color(0xFF17303F) : const Color(0xFFE9EFF3),
+    outlineVariant: dark
+        ? Colors.white.withValues(alpha: .10)
+        : YallaColors.navy.withValues(alpha: .10),
+  );
+  final textTheme = _customerTextTheme(base.textTheme, palette);
   return base.copyWith(
-    pageTransitionsTheme: _pageTransitions(base.scaffoldBackgroundColor),
+    colorScheme: scheme,
+    scaffoldBackgroundColor: page,
+    canvasColor: page,
+    textTheme: textTheme,
+    primaryTextTheme:
+        base.primaryTextTheme.apply(fontFamily: customerFontFamily),
+    cardTheme: base.cardTheme.copyWith(color: card),
+    dividerTheme: DividerThemeData(color: scheme.outlineVariant, space: 1),
+    inputDecorationTheme: base.inputDecorationTheme.copyWith(
+      fillColor: customerRaisedColor(brightness),
+      labelStyle: textTheme.bodyMedium?.copyWith(color: palette.inkMuted),
+      helperStyle: textTheme.bodySmall?.copyWith(color: palette.inkMuted),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size.fromHeight(52),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(YcRadius.sm + 2),
+        ),
+        textStyle: textTheme.labelLarge,
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        textStyle: textTheme.labelLarge,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(YcRadius.sm + 2),
+        ),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(textStyle: textTheme.labelLarge),
+    ),
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: dark ? const Color(0xFF1B3A4D) : YallaColors.navy,
+      contentTextStyle: textTheme.bodyMedium?.copyWith(color: Colors.white),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(YcRadius.sm),
+      ),
+    ),
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: card,
+      surfaceTintColor: Colors.transparent,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(YcRadius.xl)),
+      ),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: card,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(YcRadius.xl),
+      ),
+      titleTextStyle: textTheme.titleLarge,
+      contentTextStyle: textTheme.bodyMedium,
+    ),
+    appBarTheme: AppBarTheme(
+      backgroundColor: page,
+      foregroundColor: palette.ink,
+      surfaceTintColor: Colors.transparent,
+      scrolledUnderElevation: 0,
+      elevation: 0,
+      centerTitle: true,
+      titleTextStyle: textTheme.titleLarge,
+    ),
+    pageTransitionsTheme: _pageTransitions(page),
     extensions: [
       ...base.extensions.values,
       YcSurface.forBrightness(brightness),
+      palette,
     ],
   );
+}
+
+/// Material 3 sizes kept as they are (every screen was laid out and tested
+/// against them); only the family, weights and colour change. Weights map to
+/// the four shipped Almarai faces so nothing is synthesised: headlines w800,
+/// titles and labels w700, body w400.
+TextTheme _customerTextTheme(TextTheme base, YcColors palette) {
+  TextStyle? w(TextStyle? style, FontWeight weight) =>
+      style?.copyWith(fontWeight: weight);
+  return base
+      .copyWith(
+        displayLarge: w(base.displayLarge, FontWeight.w800),
+        displayMedium: w(base.displayMedium, FontWeight.w800),
+        displaySmall: w(base.displaySmall, FontWeight.w800),
+        headlineLarge: w(base.headlineLarge, FontWeight.w800),
+        headlineMedium: w(base.headlineMedium, FontWeight.w800),
+        headlineSmall: w(base.headlineSmall, FontWeight.w700),
+        titleLarge: w(base.titleLarge, FontWeight.w700),
+        titleMedium: w(base.titleMedium, FontWeight.w700),
+        titleSmall: w(base.titleSmall, FontWeight.w700),
+        bodyLarge: w(base.bodyLarge, FontWeight.w400),
+        bodyMedium: w(base.bodyMedium, FontWeight.w400),
+        bodySmall: w(base.bodySmall, FontWeight.w400),
+        labelLarge: w(base.labelLarge, FontWeight.w700),
+        labelMedium: w(base.labelMedium, FontWeight.w700),
+        labelSmall: w(base.labelSmall, FontWeight.w700),
+      )
+      .apply(
+        fontFamily: customerFontFamily,
+        bodyColor: palette.ink,
+        displayColor: palette.ink,
+      );
 }
 
 /// Android and other platforms: Material's Fade Forwards transition at

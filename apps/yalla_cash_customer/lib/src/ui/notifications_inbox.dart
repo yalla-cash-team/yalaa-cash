@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart' hide Banner;
 import 'package:yalla_cash_core/yalla_cash_core.dart';
 import 'package:yalla_cash_customer/src/ui/components.dart';
+import 'package:yalla_cash_customer/src/ui/premium.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
 
 /// "الآن", "قبل 5 دقيقة", "قبل 3 ساعة", else the local date.
@@ -38,7 +39,8 @@ class _CustomerNotificationsPageState extends State<CustomerNotificationsPage> {
   Future<void> _open(CustomerNotification notification) async {
     final marking = widget.cubit.openNotification(notification);
     unawaited(Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => CustomerNotificationDetailPage(notification: notification),
+      builder: (_) =>
+          CustomerNotificationDetailPage(notification: notification),
     )));
     if (!await marking && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -49,23 +51,18 @@ class _CustomerNotificationsPageState extends State<CustomerNotificationsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('الإشعارات'),
-        centerTitle: true,
-        backgroundColor: theme.scaffoldBackgroundColor,
-        surfaceTintColor: Colors.transparent,
-        scrolledUnderElevation: 0,
-      ),
+      appBar: AppBar(title: const Text('الإشعارات')),
       body: StreamBuilder<CustomerAppState>(
         stream: widget.cubit.stream,
         initialData: widget.cubit.state,
         builder: (context, snapshot) {
           final state = snapshot.data ?? widget.cubit.state;
+          final entries = _content(state);
           return RefreshIndicator(
             onRefresh: widget.cubit.loadNotifications,
-            child: ListView(
+            // Built lazily: only the visible entries are laid out.
+            child: ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(
                 YcSpace.gutter,
@@ -73,7 +70,8 @@ class _CustomerNotificationsPageState extends State<CustomerNotificationsPage> {
                 YcSpace.gutter,
                 YcSpace.xl,
               ),
-              children: _content(state),
+              itemCount: entries.length,
+              itemBuilder: (context, index) => entries[index](context),
             ),
           );
         },
@@ -81,71 +79,143 @@ class _CustomerNotificationsPageState extends State<CustomerNotificationsPage> {
     );
   }
 
-  List<Widget> _content(CustomerAppState state) {
+  /// The inbox as a flat list of lazily built entries: day headings and
+  /// notification cards, newest first.
+  List<WidgetBuilder> _content(CustomerAppState state) {
     final items = state.notifications;
     final status = state.notificationsStatus;
+    void retry() => unawaited(widget.cubit.loadNotifications());
     if (items.isEmpty) {
       return [
-        switch (status) {
-          LoadStatus.initial ||
-          LoadStatus.loading =>
-            const _InboxLoading(key: ValueKey('inbox-loading')),
-          LoadStatus.failure => YcCard(
-              key: const ValueKey('inbox-error'),
-              child: YcEmptyState(
-                icon: Icons.wifi_off_rounded,
-                tone: YcTone.danger,
-                title: 'تعذر تحميل الإشعارات',
-                description: state.notificationsFailure?.message ??
-                    'تحقق من اتصالك ثم حاول مجدداً.',
-                actionLabel: 'إعادة المحاولة',
-                onAction: () => unawaited(widget.cubit.loadNotifications()),
-              ),
-            ),
-          _ => const YcCard(
-              key: ValueKey('inbox-empty'),
-              child: YcEmptyState(
-                icon: Icons.notifications_none_rounded,
-                title: 'لا توجد إشعارات جديدة',
-                description: 'ستظهر هنا إشعارات يلا كاش الجديدة.',
-              ),
-            ),
-        },
+        (_) => switch (status) {
+              LoadStatus.initial || LoadStatus.loading => const YcSkeleton.card(
+                  key: ValueKey('inbox-loading'),
+                  rows: 2,
+                  label: 'جارٍ تحميل الإشعارات',
+                ),
+              LoadStatus.failure => YcCard(
+                  key: const ValueKey('inbox-error'),
+                  child: YcErrorState(
+                    icon: Icons.wifi_off_rounded,
+                    title: 'تعذر تحميل الإشعارات',
+                    description:
+                        inboxFailureMessage(state.notificationsFailure),
+                    onRetry: retry,
+                  ),
+                ),
+              _ => const YcCard(
+                  key: ValueKey('inbox-empty'),
+                  child: YcEmptyState(
+                    icon: Icons.notifications_none_rounded,
+                    title: 'لا توجد إشعارات جديدة',
+                    description: 'ستظهر هنا إشعارات يلا كاش الجديدة.',
+                  ),
+                ),
+            },
       ];
     }
-    return [
+    final now = DateTime.now();
+    final entries = <WidgetBuilder>[
       if (status == LoadStatus.loading)
-        const Padding(
-          padding: EdgeInsets.only(bottom: YcSpace.sm),
-          child: LinearProgressIndicator(),
-        ),
+        (_) => const Padding(
+              padding: EdgeInsets.only(bottom: YcSpace.sm),
+              child: LinearProgressIndicator(),
+            ),
       if (status == LoadStatus.failure)
-        Padding(
-          padding: const EdgeInsets.only(bottom: YcSpace.sm),
-          child: Row(children: [
-            Expanded(
-              child: Text('تعذر تحديث الإشعارات.',
-                  style: YcType.meta(context)),
+        (_) => Padding(
+              padding: const EdgeInsets.only(bottom: YcSpace.sm),
+              child: YcInlineBanner(
+                message: 'تعذر تحديث الإشعارات.',
+                tone: YcTone.danger,
+                actionLabel: 'إعادة المحاولة',
+                onAction: retry,
+              ),
             ),
-            TextButton(
-              onPressed: () => unawaited(widget.cubit.loadNotifications()),
-              child: const Text('إعادة المحاولة'),
-            ),
-          ]),
-        ),
-      for (final notification in items)
-        Padding(
-          padding: const EdgeInsets.only(bottom: YcSpace.sm),
-          child: _NotificationTile(
-            key: ValueKey(notification.id),
-            notification: notification,
-            onTap: () => _open(notification),
-          ),
-        ),
     ];
+    String? lastDay;
+    for (final notification in items) {
+      final day = notificationDayLabel(notification.createdAt, now: now);
+      if (day != lastDay) {
+        lastDay = day;
+        entries.add((_) => _DayHeading(day));
+      }
+      entries.add((_) => Padding(
+            padding: const EdgeInsets.only(bottom: YcSpace.sm),
+            child: _NotificationTile(
+              key: ValueKey(notification.id),
+              notification: notification,
+              onTap: () => _open(notification),
+            ),
+          ));
+    }
+    return entries;
   }
 }
 
+/// Levantine month names, as used in Syria.
+const _inboxMonths = [
+  'كانون الثاني',
+  'شباط',
+  'آذار',
+  'نيسان',
+  'أيار',
+  'حزيران',
+  'تموز',
+  'آب',
+  'أيلول',
+  'تشرين الأول',
+  'تشرين الثاني',
+  'كانون الأول',
+];
+
+/// Day heading for a notification: "اليوم", "أمس", or the local date
+/// ("12 تشرين الثاني 2026").
+String notificationDayLabel(DateTime at, {DateTime? now}) {
+  final local = at.toLocal();
+  final today = now ?? DateTime.now();
+  final day = DateTime(local.year, local.month, local.day);
+  final current = DateTime(today.year, today.month, today.day);
+  final days = current.difference(day).inDays;
+  if (days <= 0) return 'اليوم';
+  if (days == 1) return 'أمس';
+  return '${local.day} ${_inboxMonths[local.month - 1]} ${local.year}';
+}
+
+/// Friendly Arabic copy for an inbox load failure. Server text is never
+/// shown as-is (it may be technical or not in Arabic).
+String inboxFailureMessage(YallaCashFailure? failure) {
+  if (failure != null &&
+      (failure.statusCode == 401 || failure.code == 'unauthorized')) {
+    return 'انتهت الجلسة. سجّل الدخول مرة أخرى.';
+  }
+  if (failure?.code == 'network_error') {
+    return 'تعذر الاتصال بالخادم. تحقق من الشبكة وحاول مجدداً.';
+  }
+  return 'تحقق من اتصالك ثم حاول مجدداً.';
+}
+
+/// Quiet day heading between groups of notifications.
+class _DayHeading extends StatelessWidget {
+  const _DayHeading(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(4, 4, 4, YcSpace.xs),
+        child: Semantics(
+          header: true,
+          child: Text(
+            label,
+            style: YcType.meta(context)?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+}
+
+/// One notification card. The unread dot, bold title and "غير مقروء"
+/// announcement appear only when the notification really is unread
+/// ([CustomerNotification.isRead] is false).
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({
     required this.notification,
@@ -160,16 +230,24 @@ class _NotificationTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final colors = YcColors.of(context);
+    final unread = !notification.isRead;
     return Semantics(
       button: true,
-      label: 'إشعار غير مقروء',
+      label: unread ? 'إشعار غير مقروء' : 'إشعار',
       child: YcCard(
         onTap: onTap,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            YcIconBadge(Icons.notifications_active_outlined,
-                tone: YcTone.brand, size: 44, circle: true),
+            YcIconBadge(
+              unread
+                  ? Icons.notifications_active_outlined
+                  : Icons.notifications_none_rounded,
+              tone: unread ? YcTone.brand : YcTone.neutral,
+              size: 44,
+              circle: true,
+            ),
             const SizedBox(width: YcSpace.sm),
             Expanded(
               child: Column(
@@ -180,27 +258,32 @@ class _NotificationTile extends StatelessWidget {
                       child: Text(
                         notification.title,
                         style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
+                          fontWeight:
+                              unread ? FontWeight.w700 : FontWeight.w400,
+                          color: colors.ink,
                           height: 1.4,
                         ),
                       ),
                     ),
-                    const SizedBox(width: YcSpace.xs),
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: scheme.primary,
-                        shape: BoxShape.circle,
+                    if (unread) ...[
+                      const SizedBox(width: YcSpace.xs),
+                      Container(
+                        key: const Key('notification-unread-dot'),
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
+                    ],
                   ]),
                   const SizedBox(height: 4),
                   Text(
                     notification.body,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
+                    style: YcType.body(context)?.copyWith(
                       color: scheme.onSurfaceVariant,
                       height: 1.6,
                     ),
@@ -213,49 +296,6 @@ class _NotificationTile extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Static placeholders while the inbox loads (calm with reduced motion).
-class _InboxLoading extends StatelessWidget {
-  const _InboxLoading({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final block =
-        Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: .10);
-    Widget bar(double? width, double height) => Container(
-          width: width,
-          height: height,
-          decoration: BoxDecoration(
-            color: block,
-            borderRadius: BorderRadius.circular(8),
-          ),
-        );
-    return Semantics(
-      container: true,
-      label: 'جارٍ تحميل الإشعارات',
-      child: ExcludeSemantics(
-        child: Column(children: [
-          for (var i = 0; i < 2; i++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: YcSpace.sm),
-              child: YcCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    bar(140, 14),
-                    const SizedBox(height: 10),
-                    bar(double.infinity, 12),
-                    const SizedBox(height: 8),
-                    bar(90, 10),
-                  ],
-                ),
-              ),
-            ),
-        ]),
       ),
     );
   }
@@ -294,7 +334,7 @@ class CustomerNotificationDetailPage extends StatelessWidget {
                 Text(
                   notification.title,
                   style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w700,
                     height: 1.4,
                   ),
                 ),

@@ -6,6 +6,7 @@ import 'package:yalla_cash_core/yalla_cash_core.dart';
 import 'package:yalla_cash_customer/src/customer_app.dart';
 import 'package:yalla_cash_customer/src/ui/components.dart';
 import 'package:yalla_cash_customer/src/ui/customer_theme.dart';
+import 'package:yalla_cash_customer/src/ui/premium.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
 
 // ---------------------------------------------------------------------------
@@ -248,9 +249,14 @@ void main() {
         _tx('3', 'مقهى', 1500, 7),
       ]);
       // Value and unit on one line.
-      expect(find.text('+120 نقطة'), findsOneWidget);
-      expect(find.text('+40 نقطة'), findsOneWidget);
-      expect(find.text('+7 نقطة'), findsOneWidget);
+      // Premium redesign: the signed figure is isolated left-to-right so the
+      // "+" stays before the digits in RTL (see YcAmount.format).
+      expect(find.text(YcAmount.format(120, unit: 'نقطة', signed: true)),
+          findsOneWidget);
+      expect(find.text(YcAmount.format(40, unit: 'نقطة', signed: true)),
+          findsOneWidget);
+      expect(find.text(YcAmount.format(7, unit: 'نقطة', signed: true)),
+          findsOneWidget);
       expect(find.text('09/03/2026 · فاتورة 25,000 ل.س'), findsOneWidget);
       final ys = [
         for (final s in ['مطعم البيت', 'صيدلية', 'مقهى'])
@@ -262,8 +268,9 @@ void main() {
 
     testWidgets('earned points use the success tone', (tester) async {
       await pumpWallet(tester, transactions: [_tx('1', 'مطعم', 100, 5)]);
-      final ctx = tester.element(find.text('+5 نقطة'));
-      expect(tester.widget<Text>(find.text('+5 نقطة')).style?.color,
+      final earned = YcAmount.format(5, unit: 'نقطة', signed: true);
+      final ctx = tester.element(find.text(earned));
+      expect(tester.widget<Text>(find.text(earned)).style?.color,
           YcToneColors.of(ctx, YcTone.success).foreground);
     });
 

@@ -11,6 +11,47 @@ import 'package:yalla_cash_customer/src/ui/components.dart';
 import 'package:yalla_cash_customer/src/ui/tokens.dart';
 
 // ---------------------------------------------------------------------------
+// Session restore
+// ---------------------------------------------------------------------------
+
+/// Branded launch screen shown while a saved session is being restored: the
+/// official logo over a slim, quiet progress bar. It only displays; the
+/// restore itself is owned by the app.
+class CustomerSessionRestoreScreen extends StatelessWidget {
+  const CustomerSessionRestoreScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = YcColors.of(context);
+    return Scaffold(
+      body: Center(
+        child: Semantics(
+          label: 'جارٍ تحميل حسابك',
+          child: ExcludeSemantics(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const YallaCashLogo(height: 88),
+                const SizedBox(height: YcSpace.xl),
+                SizedBox(
+                  width: 112,
+                  child: LinearProgressIndicator(
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(YcRadius.pill),
+                    color: colors.brand,
+                    backgroundColor: colors.brandTint,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Header
 // ---------------------------------------------------------------------------
 
@@ -47,6 +88,13 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
   static const double greetingHeight = 34;
   static const double buttonSize = 44;
 
+  /// Minimum touch target around each header button (Material / Android).
+  static const double touchTarget = 48;
+
+  /// Inset of the touch target, so the visible button edge meets the gutter.
+  static const double _sideInset =
+      YcSpace.gutter - (touchTarget - buttonSize) / 2;
+
   /// Official logo height inside the toolbar.
   static const double logoHeight = 46;
 
@@ -61,8 +109,10 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
     final dark = theme.brightness == Brightness.dark;
     final media = MediaQuery.of(context);
     // Leading and trailing areas are the same width, so the toolbar centres
-    // the logo on the screen's true centre line.
-    const sideWidth = YcSpace.gutter + buttonSize;
+    // the logo on the screen's true centre line. Each holds a full 48dp
+    // touch target; the 44dp visible button is centred in it, so its edge
+    // still sits exactly on the page gutter.
+    const sideWidth = _sideInset + touchTarget;
     return MediaQuery(
       data: media.copyWith(
         textScaler: media.textScaler.clamp(maxScaleFactor: 1.4),
@@ -81,7 +131,7 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
         titleSpacing: 0,
         leadingWidth: sideWidth,
         leading: Padding(
-          padding: const EdgeInsetsDirectional.only(start: YcSpace.gutter),
+          padding: const EdgeInsetsDirectional.only(start: _sideInset),
           child: Center(
             child: Builder(
               builder: (context) => _HeaderButton(
@@ -98,7 +148,7 @@ class CustomerAppBar extends StatelessWidget implements PreferredSizeWidget {
           SizedBox(
             width: sideWidth,
             child: Padding(
-              padding: const EdgeInsetsDirectional.only(end: YcSpace.gutter),
+              padding: const EdgeInsetsDirectional.only(end: _sideInset),
               child: Center(
                 child: Builder(
                   builder: (context) => _HeaderButton(
@@ -144,7 +194,8 @@ class _HeaderButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final colors = YcColors.of(context);
+    final surface = YcSurface.of(context);
     final Widget glyph = showDot
         ? Badge(
             key: const Key('notifications-unread-dot'),
@@ -161,10 +212,15 @@ class _HeaderButton extends StatelessWidget {
           CustomerAppBar.buttonSize,
           CustomerAppBar.buttonSize,
         ),
-        backgroundColor: scheme.primary.withValues(alpha: .10),
-        foregroundColor: scheme.primary,
+        // The 44dp button gets a full 48x48 touch area on every platform.
+        tapTargetSize: MaterialTapTargetSize.padded,
+        // Quiet neutral chrome (card surface + hairline) so the balance
+        // card stays the hero of the screen.
+        backgroundColor: surface.card,
+        foregroundColor: colors.ink,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(YcRadius.sm),
+          side: BorderSide(color: surface.hairline),
         ),
       ),
       icon: glyph,
@@ -198,7 +254,7 @@ class _GreetingRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
@@ -257,7 +313,7 @@ class CustomerNavBar extends StatelessWidget {
           labelTextStyle: WidgetStateProperty.resolveWith(
             (states) => labelStyle?.copyWith(
               fontWeight: states.contains(WidgetState.selected)
-                  ? FontWeight.w800
+                  ? FontWeight.w700
                   : FontWeight.w600,
               color: states.contains(WidgetState.selected)
                   ? scheme.primary
@@ -285,9 +341,10 @@ class CustomerNavBar extends StatelessWidget {
                   _NavIcon(Icons.home_rounded, active: selectedIndex == 0),
               label: 'الرئيسية',
             ),
-            // A single icon: the selected colour and indicator mark it.
-            const NavigationDestination(
-              icon: Icon(Icons.qr_code_2_rounded),
+            // The customer's code is the app's primary action: one QR icon on
+            // a hero-gradient disc, with a gold ring while selected.
+            NavigationDestination(
+              icon: _QrNavBadge(selected: selectedIndex == 1),
               label: 'كودي',
             ),
             NavigationDestination(
@@ -307,6 +364,42 @@ class CustomerNavBar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The QR tab's distinctive mark: a 36dp disc in the navy → blue hero
+/// gradient with a white QR icon, ringed in gold when the tab is selected.
+/// It is the destination's only icon, so the QR glyph appears once.
+class _QrNavBadge extends StatelessWidget {
+  const _QrNavBadge({required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = YcColors.of(context);
+    return AnimatedContainer(
+      duration: YcMotion.resolve(context, YcMotion.fast),
+      curve: YcMotion.standard,
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: colors.heroGradient,
+        border: Border.all(
+          color: selected ? colors.gold : Colors.transparent,
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: YallaColors.navy.withValues(alpha: .18),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Icon(Icons.qr_code_2_rounded, size: 20, color: colors.onHero),
     );
   }
 }

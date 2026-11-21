@@ -182,7 +182,7 @@ class YcSectionHeader extends StatelessWidget {
             onPressed: action,
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: YcSpace.sm),
-              textStyle: const TextStyle(fontWeight: FontWeight.w800),
+              textStyle: const TextStyle(fontWeight: FontWeight.w700),
             ),
             child: Text(label),
           ),
@@ -243,7 +243,7 @@ class YcEmptyState extends StatelessWidget {
             title,
             textAlign: TextAlign.center,
             style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w700,
             ),
           ),
           if (desc != null && desc.isNotEmpty) ...[
@@ -336,7 +336,7 @@ class YcListRow extends StatelessWidget {
                       maxLines: titleMaxLines,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
+                            fontWeight: FontWeight.w700,
                             height: 1.3,
                             color: titleColor,
                           ),
@@ -436,7 +436,7 @@ class YcStatusChip extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: colors.foreground,
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w700,
                     ),
               ),
             ),
@@ -666,13 +666,42 @@ class _YcRevealOnFirstShowState extends State<YcRevealOnFirstShow> {
 // YcSkeleton
 // ---------------------------------------------------------------------------
 
+/// Shape of a [YcSkeleton].
+enum YcSkeletonKind {
+  /// List rows: badge, two lines and a trailing figure.
+  list,
+
+  /// Message cards: round badge and three lines (notifications).
+  card,
+
+  /// Media cards: an image area, a pill and text lines (offers).
+  offer,
+}
+
 /// Static loading placeholder: soft rounded bars inside a [YcCard]. No
 /// perpetual animation, so it is calm and cheap. Announced once as loading.
 class YcSkeleton extends StatelessWidget {
-  const YcSkeleton({super.key, this.rows = 3, this.label = 'جارٍ التحميل'});
+  const YcSkeleton({
+    super.key,
+    this.rows = 3,
+    this.label = 'جارٍ التحميل',
+  }) : kind = YcSkeletonKind.list;
+
+  /// Message-card placeholders (e.g. the notification inbox).
+  const YcSkeleton.card({
+    super.key,
+    this.rows = 3,
+    this.label = 'جارٍ التحميل',
+  }) : kind = YcSkeletonKind.card;
+
+  /// One media-card placeholder (e.g. an offer with its image).
+  const YcSkeleton.offer({super.key, this.label = 'جارٍ التحميل'})
+      : rows = 1,
+        kind = YcSkeletonKind.offer;
 
   final int rows;
   final String label;
+  final YcSkeletonKind kind;
 
   @override
   Widget build(BuildContext context) {
@@ -689,6 +718,79 @@ class YcSkeleton extends StatelessWidget {
             borderRadius: circle ? null : BorderRadius.circular(6),
           ),
         );
+    Widget line(double factor, double h) => FractionallySizedBox(
+          widthFactor: factor,
+          child: block(double.infinity, h),
+        );
+    if (kind == YcSkeletonKind.offer) {
+      return Semantics(
+        container: true,
+        label: label,
+        child: ExcludeSemantics(
+          child: YcCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AspectRatio(aspectRatio: 16 / 9, child: ColoredBox(color: fill)),
+                Padding(
+                  padding: const EdgeInsets.all(YcSpace.md),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      block(96, 26),
+                      const SizedBox(height: YcSpace.sm),
+                      line(.7, 16),
+                      const SizedBox(height: YcSpace.xs),
+                      line(.95, 12),
+                      const SizedBox(height: 6),
+                      line(.5, 12),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (kind == YcSkeletonKind.card) {
+      return Semantics(
+        container: true,
+        label: label,
+        child: ExcludeSemantics(
+          child: Column(
+            children: [
+              for (var i = 0; i < rows; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: YcSpace.sm),
+                  child: YcCard(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        block(44, 44, circle: true),
+                        const SizedBox(width: YcSpace.sm),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              line(.55, 14),
+                              const SizedBox(height: YcSpace.xs),
+                              line(.95, 11),
+                              const SizedBox(height: 6),
+                              line(.3, 10),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
     return Semantics(
       label: label,
       child: ExcludeSemantics(

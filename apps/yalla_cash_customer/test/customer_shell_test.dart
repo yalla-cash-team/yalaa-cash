@@ -209,10 +209,20 @@ void main() {
       final bell = tester.getSize(find.ancestor(
           of: find.byIcon(Icons.notifications_none_rounded),
           matching: find.byType(IconButton)));
-      // 44dp buttons; Material pads the touch area to 48dp tall for
+      // 44dp buttons; Material pads the touch area to 48dp for
       // accessibility. Menu and bell are identical either way.
-      expect(menu.width, 44);
-      expect(menu.height, greaterThanOrEqualTo(44));
+      // Phase 7 accessibility fix: the touch area is now a full 48x48 (it was
+      // 48 tall but only 44 wide); the visible button stays exactly 44dp.
+      final visible = tester.getSize(find
+          .descendant(
+              of: find.ancestor(
+                  of: find.byIcon(Icons.menu_rounded),
+                  matching: find.byType(IconButton)),
+              matching: find.byType(Material))
+          .first);
+      expect(visible, const Size(44, 44));
+      expect(menu.width, greaterThanOrEqualTo(48));
+      expect(menu.height, greaterThanOrEqualTo(48));
       expect(bell, menu);
     });
 

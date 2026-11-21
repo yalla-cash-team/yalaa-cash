@@ -115,7 +115,7 @@ void main() {
       ('no image', ''),
       ('failed image', 'https://invalid.example/ad.png'),
     ]) {
-      testWidgets('$b / $label: corners stay rounded at rest and mid-slide',
+      testWidgets('$b / $label: corners stay rounded at rest and mid-change',
           (tester) async {
         await _pumpHome(
           tester,
@@ -131,20 +131,29 @@ void main() {
 
         _expectRoundedCorners(await _captureCarousel(tester), 'at rest');
 
-        // Rotation fires at 2s; mid-transition is ~175ms into the 350ms slide.
-        await tester.pump(const Duration(seconds: 2));
-        await tester.pump(const Duration(milliseconds: 175));
-        final pixels = _position(tester).pixels;
+        // Rotation fires at 5s. Premium redesign: the next ad is precached
+        // and then crossfades in (250ms) instead of sliding.
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pump(const Duration(milliseconds: 125));
         final width = _position(tester).viewportDimension;
-        expect(pixels, inExclusiveRange(width * .15, width * .85),
-            reason: 'must be genuinely mid-slide');
-        _expectRoundedCorners(await _captureCarousel(tester), 'mid-slide');
-
-        // Sample several frames across the whole transition.
-        for (var i = 0; i < 5; i++) {
-          await tester.pump(const Duration(milliseconds: 30));
-          _expectRoundedCorners(
-              await _captureCarousel(tester), 'frame ${i + 1}');
+        if (url.isEmpty) {
+          // Nothing to load: the page changes at once and the outgoing ad
+          // fades out on top. Every frame stays inside the rounded clip.
+          expect(_position(tester).pixels, closeTo(width, 1));
+          expect(find.byKey(const Key('banner-crossfade')), findsOneWidget,
+              reason: 'must be genuinely mid-crossfade');
+          _expectRoundedCorners(await _captureCarousel(tester), 'mid-fade');
+          for (var i = 0; i < 5; i++) {
+            await tester.pump(const Duration(milliseconds: 30));
+            _expectRoundedCorners(
+                await _captureCarousel(tester), 'frame ${i + 1}');
+          }
+        } else {
+          // A banner whose image fails to load is skipped: the current ad
+          // stays (see premium_banner_carousel_test for the full cases).
+          expect(_position(tester).pixels, 0);
+          expect(find.byKey(const Key('banner-crossfade')), findsNothing);
+          _expectRoundedCorners(await _captureCarousel(tester), 'skipped');
         }
 
         await tester.pumpAndSettle(const Duration(milliseconds: 50));
@@ -172,13 +181,12 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets(
-      'rotation timing is unchanged: still at rest at 1.9s, moves at 2s',
+  testWidgets('rotation timing: still at rest at 4.9s, moves at 5s (was 2s)',
       (tester) async {
     await _pumpHome(tester, [_banner('a', ''), _banner('b', '')]);
-    await tester.pump(const Duration(milliseconds: 1900));
+    await tester.pump(const Duration(milliseconds: 4900));
     expect(_position(tester).pixels, 0);
-    await tester.pump(const Duration(milliseconds: 150)); // timer at 2s + frame
+    await tester.pump(const Duration(milliseconds: 150)); // timer at 5s + frame
     await tester.pump(const Duration(milliseconds: 100));
     expect(_position(tester).pixels, greaterThan(0));
     await tester.pumpAndSettle(const Duration(milliseconds: 50));
@@ -204,7 +212,7 @@ void main() {
         const FakeAccessibilityFeatures(disableAnimations: true);
     addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
     await _pumpHome(tester, [_banner('a', ''), _banner('b', '')]);
-    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 16));
     final width = _position(tester).viewportDimension;
     // Exactly one full page, never an in-between offset.
@@ -213,7 +221,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('320dp: rounded at rest and mid-slide', (tester) async {
+  testWidgets('320dp: rounded at rest and mid-fade', (tester) async {
     tester.view.physicalSize = const Size(320, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -238,9 +246,10 @@ void main() {
         ),
       ),
     );
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pump(const Duration(milliseconds: 175));
-    _expectRoundedCorners(await _captureCarousel(tester), '320dp mid-slide');
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 125));
+    expect(find.byKey(const Key('banner-crossfade')), findsOneWidget);
+    _expectRoundedCorners(await _captureCarousel(tester), '320dp mid-fade');
     await tester.pumpWidget(const SizedBox());
   });
 }
